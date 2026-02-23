@@ -1,3 +1,0 @@
-C:/Users/Aitor/source/repos/LearnWebGPU/build/CMakeFiles/ALL_BUILD.dir
-C:/Users/Aitor/source/repos/LearnWebGPU/build/CMakeFiles/ZERO_CHECK.dir
-C:/Users/Aitor/source/repos/LearnWebGPU/build/LearnWebGPU/CMakeFiles/LearnWebGPU.dir
