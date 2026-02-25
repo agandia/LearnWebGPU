@@ -30,7 +30,11 @@
 * exercise on my end.
 */
 #include "webgpu-utils.h"
+
 #include <webgpu/webgpu.h>
+#ifdef WEBGPU_BACKEND_WGPU
+#  include <webgpu/wgpu.h>
+#endif // WEBGPU_BACKEND_WGPU
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -108,6 +112,47 @@ int main(int, char**)
   // Display information about the device
   inspectDevice(device);
 
+  WGPUQueue queue = wgpuDeviceGetQueue(device);
+  // Add a callback to monitor the moment queued work finishes.
+  auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void* /* pUserData */) {
+    std::cout << "Queue work done: status " << status << std::endl;
+  };
+
+  wgpuQueueOnSubmittedWorkDone(queue, onQueueWorkDone, nullptr /* pUserData */);
+
+  WGPUCommandEncoderDescriptor encoderDesc = {};
+  encoderDesc.nextInChain = nullptr;
+  encoderDesc.label = "My command encoder";
+  WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encoderDesc);
+
+  wgpuCommandEncoderInsertDebugMarker(encoder, "Do one thing");
+  wgpuCommandEncoderInsertDebugMarker(encoder, "Do another thing");
+
+  WGPUCommandBufferDescriptor cmdBufferDesc = {};
+  cmdBufferDesc.nextInChain = nullptr;
+  cmdBufferDesc.label = "Command buffer";
+  WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdBufferDesc);
+  wgpuCommandEncoderRelease(encoder);
+
+  // Finally submit the command queue
+  std::cout << "Submitting command buffer..." << std::endl;
+  wgpuQueueSubmit(queue, 1, &cmdBuffer);
+  wgpuCommandBufferRelease(cmdBuffer);
+  std::cout << "Command submitted." << std::endl;
+  for (int i = 0; i < 5; ++i) {
+    std::cout << "Tick/Poll device..." << std::endl;
+#if defined(WEBGPU_BACKEND_DAWN)
+    wgpuDeviceTick(device);
+#elif defined(WEBGPU_BACKEND_WGPU)
+    wgpuDevicePoll(device, false, nullptr);
+#elif defined(WEBGPU_BACKEND_EMSCRIPTEN)
+    // In the Emscripten backend, the device is automatically ticked by the
+    // browser, so we don't need to do anything here besides waiting for a bit to let the work be done.
+    emscripten_sleep(100);
+#endif
+  }
+
+  wgpuQueueRelease(queue);
   wgpuDeviceRelease(device);
 
 	return 0;
