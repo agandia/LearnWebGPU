@@ -35,6 +35,8 @@
 #ifdef WEBGPU_BACKEND_WGPU
 #  include <webgpu/wgpu.h>
 #endif // WEBGPU_BACKEND_WGPU
+#include <GLFW/glfw3.h>
+#include <glfw3webgpu.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -44,8 +46,66 @@
 #include <cassert>
 #include <vector>
 
+class Application {
+  public:
+    // Initialize all or catch errors.
+    bool Initialize();
+
+    // Clean everything
+    void Terminate();
+
+    // Draw a frame and handle events
+    void MainLoop();
+
+    // Returns true if the application should keep running, false if it should exit.
+    bool IsRunning();
+
+  private:
+    // Shared data between initi and main loop.
+    GLFWwindow* window;
+    WGPUDevice device;
+    WGPUQueue queue;
+    WGPUSurface surface;
+};
+
 int main(int, char**)
 {
+  Application app;
+
+  if (!app.Initialize()) {
+    std::cerr << "Failed to initialize the application. Program terminated" << std::endl;
+    return 1;
+  }
+
+#ifdef __EMSCRIPTEN__
+  // In the Emscripten backend, we use emscripten_set_main_loop to call the main loop function repeatedly until the application is closed.
+  auto callback = [](void* arg) {
+    //                    ^^^ 2. We get the address of the app in the callback.
+    Application* pApp = reinterpret_cast<Application*>(arg);
+    //                  ^^^^^^^^^^^^^^^^ 3. We force this address to be interpreted
+    //                                      as a pointer to an Application object.
+    pApp->MainLoop(); // 4. We can use the application object
+    };
+  emscripten_set_main_loop_arg(callback, &app, 0, true);
+  //                                     ^^^^ 1. We pass the address of our application object.
+#else
+  while (app.IsRunning()) {
+    app.MainLoop();
+  }
+#endif // __EMSCRIPTEN__
+
+  app.Terminate();
+  return 0;
+
+}
+
+bool Application::Initialize() {
+  // Start by opening a window.
+  glfwInit();
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // NO_API bc We don't want OpenGL, we'll use WebGPU instead.
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // No resizing at this step of the guide
+  window = glfwCreateWindow(800, 600, "Learn WebGPU", nullptr, nullptr);
+
 	// We create the descriptor
   WGPUInstanceDescriptor desc = {};
   desc.nextInChain = nullptr;
@@ -62,21 +122,19 @@ int main(int, char**)
   // Check if the instance was created successfully
   if (!instance) {
     std::cerr << "Failed to create WebGPU instance. Could not initialize WebGPU" << std::endl;
-    return 1;
+    return false;
   }
 
-  // Display the object (WGPUInstance is a simple pointer, it may be
-  // copied around without worrying about its size).
-  std::cout << "WGPU instance: " << instance << std::endl;
-
   std::cout << "Requesting adapter..." << std::endl;
+  // Capture surface here so we can use in the main loop
+  surface = glfwGetWGPUSurface(instance, window);
+
   WGPURequestAdapterOptions adapterOpts = {};
   adapterOpts.nextInChain = nullptr;
+  adapterOpts.compatibleSurface = surface;
+
   WGPUAdapter adapter = requestAdapterSync(instance, &adapterOpts);
   std::cout << "Got adapter: " << adapter << std::endl;
-
-  // Display some information about the adapter
-  inspectAdapter(adapter);
 
   // It is good practice to release the instance as soon as we have the adapter.
   wgpuInstanceRelease(instance);
@@ -95,8 +153,12 @@ int main(int, char**)
     if (message) std::cout << " (" << message << ")";
     std::cout << std::endl;
     };
-  WGPUDevice device = requestDeviceSync(adapter, &deviceDesc);
+
+  device = requestDeviceSync(adapter, &deviceDesc);
   std::cout << "Got device: " << device << std::endl;
+
+  // And equally good practice to release the adapter as soon as we have the device.
+  wgpuAdapterRelease(adapter);
 
   // A function that is invoked whenever there is an error in the use of the device
   auto onDeviceError = [](WGPUErrorType type, char const* message, void* /* pUserData */) {
@@ -106,54 +168,29 @@ int main(int, char**)
     };
   wgpuDeviceSetUncapturedErrorCallback(device, onDeviceError, nullptr /* pUserData */);
 
-  // And equally good practice to release the adapter as soon as we have the device.
-  wgpuAdapterRelease(adapter);
+  queue = wgpuDeviceGetQueue(device);
+  return true;
+}
 
-  // Display information about the device
-  inspectDevice(device);
-
-  WGPUQueue queue = wgpuDeviceGetQueue(device);
-  // Add a callback to monitor the moment queued work finishes.
-  auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void* /* pUserData */) {
-    std::cout << "Queue work done: status " << status << std::endl;
-  };
-
-  wgpuQueueOnSubmittedWorkDone(queue, onQueueWorkDone, nullptr /* pUserData */);
-
-  WGPUCommandEncoderDescriptor encoderDesc = {};
-  encoderDesc.nextInChain = nullptr;
-  encoderDesc.label = "My command encoder";
-  WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encoderDesc);
-
-  wgpuCommandEncoderInsertDebugMarker(encoder, "Do one thing");
-  wgpuCommandEncoderInsertDebugMarker(encoder, "Do another thing");
-
-  WGPUCommandBufferDescriptor cmdBufferDesc = {};
-  cmdBufferDesc.nextInChain = nullptr;
-  cmdBufferDesc.label = "Command buffer";
-  WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdBufferDesc);
-  wgpuCommandEncoderRelease(encoder);
-
-  // Finally submit the command queue
-  std::cout << "Submitting command buffer..." << std::endl;
-  wgpuQueueSubmit(queue, 1, &cmdBuffer);
-  wgpuCommandBufferRelease(cmdBuffer);
-  std::cout << "Command submitted." << std::endl;
-  for (int i = 0; i < 5; ++i) {
-    std::cout << "Tick/Poll device..." << std::endl;
-#if defined(WEBGPU_BACKEND_DAWN)
-    wgpuDeviceTick(device);
-#elif defined(WEBGPU_BACKEND_WGPU)
-    wgpuDevicePoll(device, false, nullptr);
-#elif defined(WEBGPU_BACKEND_EMSCRIPTEN)
-    // In the Emscripten backend, the device is automatically ticked by the
-    // browser, so we don't need to do anything here besides waiting for a bit to let the work be done.
-    emscripten_sleep(100);
-#endif
-  }
-
+void Application::Terminate() {
   wgpuQueueRelease(queue);
+  wgpuSurfaceRelease(surface);
   wgpuDeviceRelease(device);
+  glfwDestroyWindow(window);
+  glfwTerminate();
+}
 
-	return 0;
+void Application::MainLoop() {
+  glfwPollEvents();
+
+  // Tick/Poll the device but do not sleep for EMSCRIPTEN, do in the init callback instead.
+#if defined(WEBGPU_BACKEND_DAWN)
+  wgpuDeviceTick(device);
+#elif defined(WEBGPU_BACKEND_WGPU)
+  wgpuDevicePoll(device, false, nullptr);
+#endif
+}
+
+bool Application::IsRunning() {
+  return !glfwWindowShouldClose(window);
 }

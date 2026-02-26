@@ -2,6 +2,20 @@
 # project specific logic here.
 #
 
+# Add glfw lib to have a window
+if (NOT EMSCRIPTEN)
+    # Add the 'glfw' directory, which contains the definition of a 'glfw' target
+    add_subdirectory(glfw)
+else()
+    # Create a mock 'glfw' target that just sets the `-sUSE_GLFW=3` link option:
+    add_library(glfw INTERFACE)
+    target_link_options(glfw INTERFACE -sUSE_GLFW=3)
+endif()
+# In both cases, we can now link to the 'glfw' target
+
+# Add a little extension of glfw that connects it to WebGPU
+add_subdirectory(glfw3webgpu)
+
 # Include webgpu directory, to define the "webgpu" target."
 add_subdirectory(webgpu)
 
@@ -9,7 +23,7 @@ add_subdirectory(webgpu)
 add_executable (LearnWebGPU "Main.cpp" "webgpu-utils.h" "webgpu-utils.cpp")
 
 # Add the "webgpu" target as a dependency of the executable
-target_link_libraries(LearnWebGPU PRIVATE webgpu)
+target_link_libraries(LearnWebGPU PRIVATE webgpu glfw glfw3webgpu)
 
 # The appliucation's binary must find wgpu.dll or libwgpu.so at runtime,
 # so we copy it (called WPU_RUNTIME_LIB in general)
