@@ -29,22 +29,28 @@
 * that are not part of the original work. These modifications are a result of a learning
 * exercise on my end.
 */
-#include "webgpu-utils.h"
 
-#include <webgpu/webgpu.h>
-#ifdef WEBGPU_BACKEND_WGPU
-#  include <webgpu/wgpu.h>
-#endif // WEBGPU_BACKEND_WGPU
+// NOTE: Use for debug only.
+//#include "webgpu-utils.h"
+
+// Replaced default <webgpu/webgpu.hpp> with the webgpu.hpp version,
+// containing some syntactic sugar and C++ wrappers
+#define WEBGPU_CPP_IMPLEMENTATION
+#include "webgpu/webgpu.hpp"
+
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
 
 #ifdef __EMSCRIPTEN__
-#include <emscripten/emscripten.h>
+#include <emscripten.h>
 #endif // __EMSCRIPTEN__
 
 #include <iostream>
 #include <cassert>
 #include <vector>
+
+// use wgpu namespace for convenience
+using namespace wgpu;
 
 class Application {
   public:
@@ -61,13 +67,15 @@ class Application {
     bool IsRunning();
 
   private:
-    WGPUTextureView GetNextSurfaceTextureView();
+    TextureView GetNextSurfaceTextureView();
 
-    // Shared data between initi and main loop.
+    // Shared data between init and main loop.
     GLFWwindow* window;
-    WGPUDevice device;
-    WGPUQueue queue;
-    WGPUSurface surface;
+    Device device;
+    Queue queue;
+    Surface surface;
+
+    std::unique_ptr<ErrorCallback> uncapturedErrorCallbackHandle;
 };
 
 int main(int, char**)
@@ -82,14 +90,10 @@ int main(int, char**)
 #ifdef __EMSCRIPTEN__
   // In the Emscripten backend, we use emscripten_set_main_loop to call the main loop function repeatedly until the application is closed.
   auto callback = [](void* arg) {
-    //                     ^^^ 2. We get the address of the app in the callback.
     Application* pApp = reinterpret_cast<Application*>(arg);
-    //                  ^^^^^^^^^^^^^^^^ 3. We force this address to be interpreted
-    //                                      as a pointer to an Application object.
-    pApp->MainLoop(); // 4. We can use the application object
+    pApp->MainLoop();
     };
   emscripten_set_main_loop_arg(callback, &app, 0, true);
-  //                                     ^^^^ 1. We pass the address of our application object.
 #else
   while (app.IsRunning()) {
     app.MainLoop();
@@ -108,18 +112,7 @@ bool Application::Initialize() {
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // No resizing at this step of the guide
   window = glfwCreateWindow(800, 600, "Learn WebGPU", nullptr, nullptr);
 
-	// We create the descriptor
-  WGPUInstanceDescriptor desc = {};
-  desc.nextInChain = nullptr;
-
-  // We create the instance using this descriptor
-#ifdef WEBGPU_BACKEND_EMSCRIPTEN
-  WGPUInstance instance = wgpuCreateInstance(nullptr);
-  std::cout << "EMSCRIPTEN BACKENDED INSTANCE" << std::endl;
-#else
-  WGPUInstance instance = wgpuCreateInstance(&desc);
-  std::cout << "WGPU/DAWN BACKENDED INSTANCE" << std::endl;
-#endif // WEBGPU_BACKEND_EMSCRIPTEN
+	Instance instance = wgpuCreateInstance(nullptr);
 
   // Check if the instance was created successfully
   if (!instance) {
@@ -127,23 +120,21 @@ bool Application::Initialize() {
     return false;
   }
 
-  std::cout << "Requesting adapter..." << std::endl;
   // Capture surface here so we can use in the main loop
   surface = glfwGetWGPUSurface(instance, window);
 
-  WGPURequestAdapterOptions adapterOpts = {};
-  adapterOpts.nextInChain = nullptr;
+  std::cout << "Requesting adapter..." << std::endl;
+  RequestAdapterOptions adapterOpts = {};
   adapterOpts.compatibleSurface = surface;
 
-  WGPUAdapter adapter = requestAdapterSync(instance, &adapterOpts);
+  Adapter adapter = instance.requestAdapter(adapterOpts);
   std::cout << "Got adapter: " << adapter << std::endl;
 
   // It is good practice to release the instance as soon as we have the adapter.
-  wgpuInstanceRelease(instance);
+  instance.release();
 
   std::cout << "Requesting device..." << std::endl;
-  WGPUDeviceDescriptor deviceDesc = {};
-  deviceDesc.nextInChain = nullptr;
+  DeviceDescriptor deviceDesc = {};
   deviceDesc.label = "My Device"; // anything works here, that's your call
   deviceDesc.requiredFeatureCount = 0; // we do not require any specific feature
   deviceDesc.requiredLimits = nullptr; // we do not require any specific limit
@@ -156,50 +147,48 @@ bool Application::Initialize() {
     std::cout << std::endl;
     };
 
-  device = requestDeviceSync(adapter, &deviceDesc);
+  device = adapter.requestDevice(deviceDesc);
   std::cout << "Got device: " << device << std::endl;
 
   // A function that is invoked whenever there is an error in the use of the device
-  auto onDeviceError = [](WGPUErrorType type, char const* message, void* /* pUserData */) {
+  uncapturedErrorCallbackHandle = device.setUncapturedErrorCallback([](ErrorType type, char const* message) {
     std::cout << "Uncaptured device error: type " << type;
     if (message) std::cout << " (" << message << ")";
     std::cout << std::endl;
-    };
-  wgpuDeviceSetUncapturedErrorCallback(device, onDeviceError, nullptr /* pUserData */);
-
-  queue = wgpuDeviceGetQueue(device);
+    });
+  
+  queue = device.getQueue();
 
   // We configure the surface
-  WGPUSurfaceConfiguration config = {};
-  config.nextInChain = nullptr;
+  SurfaceConfiguration config = {};
 
   // Config of the textures created for the underlying swap chain
   config.width = 640;
   config.height = 480;
-  config.usage = WGPUTextureUsage_RenderAttachment;
-  WGPUTextureFormat surfaceFormat = wgpuSurfaceGetPreferredFormat(surface, adapter);
+  config.usage = TextureUsage::RenderAttachment;
+  TextureFormat surfaceFormat = surface.getPreferredFormat(adapter);
   config.format = surfaceFormat;
 
   // Here we do not use any particular view format yet
   config.viewFormatCount = 0;
   config.viewFormats = nullptr;
   config.device = device;
-  config.presentMode = WGPUPresentMode_Fifo;
-  config.alphaMode = WGPUCompositeAlphaMode_Auto;
+  config.presentMode = PresentMode::Fifo;
+  config.alphaMode = CompositeAlphaMode::Auto;
 
-  wgpuSurfaceConfigure(surface, &config);
+  surface.configure(config);
 
   // And equally good practice to release the adapter as soon as we have the device and have configured the surface/underlying swapchain.
-  wgpuAdapterRelease(adapter);  
+  adapter.release();
 
   return true;
 }
 
 void Application::Terminate() {
-  wgpuSurfaceUnconfigure(surface);
-  wgpuQueueRelease(queue);
-  wgpuSurfaceRelease(surface);
-  wgpuDeviceRelease(device);
+  surface.unconfigure();
+  queue.release();
+  surface.release();
+  device.release();
   glfwDestroyWindow(window);
   glfwTerminate();
 }
@@ -208,25 +197,23 @@ void Application::MainLoop() {
   glfwPollEvents();
 
   // Get the next target texture/surface view
-  WGPUTextureView targetView = GetNextSurfaceTextureView();
+  TextureView targetView = GetNextSurfaceTextureView();
   if (!targetView) return;
 
   // Create the command encoder for the draw call
-  WGPUCommandEncoderDescriptor encoderDesc = {};
-  encoderDesc.nextInChain = nullptr;
+  CommandEncoderDescriptor encoderDesc = {};
   encoderDesc.label = "My command encoder";
-  WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encoderDesc);
+  CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
   // Create the render pass that clears the screen with our color (Equivalent to the usual glClearColor();
-  WGPURenderPassDescriptor renderPassDesc = {};
-  renderPassDesc.nextInChain = nullptr;
+  RenderPassDescriptor renderPassDesc = {};
 
   // The attachment part of the render pass descpritor describes the target texture of the pass
-  WGPURenderPassColorAttachment renderPassColorAttachment = {};
+  RenderPassColorAttachment renderPassColorAttachment = {};
   renderPassColorAttachment.view = targetView;
   renderPassColorAttachment.resolveTarget = nullptr;
-  renderPassColorAttachment.loadOp = WGPULoadOp_Clear;
-  renderPassColorAttachment.storeOp = WGPUStoreOp_Store;
+  renderPassColorAttachment.loadOp = LoadOp::Clear;
+  renderPassColorAttachment.storeOp = StoreOp::Store;
   renderPassColorAttachment.clearValue = WGPUColor{ 0.9, 0.1, 0.2, 1.0 };
 #ifndef WEBGPU_BACKEND_WGPU
   renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
@@ -237,33 +224,32 @@ void Application::MainLoop() {
   renderPassDesc.depthStencilAttachment = nullptr;
   renderPassDesc.timestampWrites = nullptr;
 
-  // Create the render pass and end it immediatelly, for now we don't draw anything, besides clearing the screen
-  WGPURenderPassEncoder renderPass = wgpuCommandEncoderBeginRenderPass(encoder, &renderPassDesc);
-  wgpuRenderPassEncoderEnd(renderPass);
-  wgpuRenderPassEncoderRelease(renderPass);
+  // Create the render pass and end it immediately, for now we don't draw anything, besides clearing the screen
+  RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
+  renderPass.end();
+  renderPass.release();
 
   // Finally encode and submit the render pass.
-  WGPUCommandBufferDescriptor cmdBufferDesc = {};
-  cmdBufferDesc.nextInChain = nullptr;
+  CommandBufferDescriptor cmdBufferDesc = {};
   cmdBufferDesc.label = "Command Buffer";
-  WGPUCommandBuffer command = wgpuCommandEncoderFinish(encoder, &cmdBufferDesc);
+  CommandBuffer command = encoder.finish(cmdBufferDesc);
 
   std::cout << "Submitting command..." << std::endl;
-  wgpuQueueSubmit(queue, 1, &command);
-  wgpuCommandBufferRelease(command);
+  queue.submit(1, &command);
+  command.release();
   std::cout << "Command submitted." << std::endl;
 
   // At the end of the frame
-  wgpuTextureViewRelease(targetView);
+  targetView.release();
 #ifndef __EMSCRIPTEN__
-  wgpuSurfacePresent(surface);
+  surface.present();
 #endif
 
   // Tick/Poll the device but do not sleep for EMSCRIPTEN, do in the init callback instead.
 #if defined(WEBGPU_BACKEND_DAWN)
-  wgpuDeviceTick(device);
+  device.tick();
 #elif defined(WEBGPU_BACKEND_WGPU)
-  wgpuDevicePoll(device, false, nullptr);
+  device.poll(false);
 #endif
 }
 
@@ -271,31 +257,32 @@ bool Application::IsRunning() {
   return !glfwWindowShouldClose(window);
 }
 
-WGPUTextureView Application::GetNextSurfaceTextureView() {
+TextureView Application::GetNextSurfaceTextureView() {
     // Get the surface Texture
-    WGPUSurfaceTexture surfaceTexture;
-    wgpuSurfaceGetCurrentTexture(surface, &surfaceTexture);
-    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_Success) {
+    SurfaceTexture surfaceTexture;
+    surface.getCurrentTexture(&surfaceTexture);
+    if (surfaceTexture.status != SurfaceGetCurrentTextureStatus::Success) {
         return nullptr;
     }
+    Texture texture = surfaceTexture.texture;
 
     // Create a view for this surface texture
-    WGPUTextureViewDescriptor viewDescriptor;
-    viewDescriptor.nextInChain = nullptr;
+    TextureViewDescriptor viewDescriptor;
     viewDescriptor.label = "Surface Texture View";
-    viewDescriptor.format = wgpuTextureGetFormat(surfaceTexture.texture);
-    viewDescriptor.dimension = WGPUTextureViewDimension_2D;
+    viewDescriptor.format = texture.getFormat();
+    viewDescriptor.dimension = TextureViewDimension::_2D;
     viewDescriptor.baseMipLevel = 0;
     viewDescriptor.mipLevelCount = 1;
     viewDescriptor.baseArrayLayer = 0;
     viewDescriptor.arrayLayerCount = 1;
-    viewDescriptor.aspect = WGPUTextureAspect_All;
-    WGPUTextureView targetView = wgpuTextureCreateView(surfaceTexture.texture, &viewDescriptor);
+    viewDescriptor.aspect = TextureAspect::All;
+    TextureView targetView = texture.createView(viewDescriptor);
 
 #ifndef WEBGPU_BACKEND_WGPU
     // We no longer need the texture, only its view
     // NOTE: with wgpu-native, surface textures must not be manually released
-    wgpuTextureRelease(surfaceTexture.texture);
+    //wgpuTextureRelease(surfaceTexture.texture);
+    texture.release();
 #endif // WEBGPU_BACKEND_WGPU
 
     return targetView;
