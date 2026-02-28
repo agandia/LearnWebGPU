@@ -69,6 +69,21 @@ const char * shaderSource = R"(
   }
 )";
 
+// We define a function that hides implementation-specific variants of device polling
+void wgpuPollEvents([[maybe_unused]] Device device, [[maybe_unused]] bool yieldToWebBrowser) {
+#if defined(WEBGPU_BACKEND_DAWN)
+  device.tick();
+#elif defined(WEBGPU_BACKEND_WGPU)
+  device.poll(false);
+#elif defined(__EMSCRIPTEN__)
+  // In the Emscripten backend, we yield to the web browser to allow it to process events and avoid freezing the page.
+  // We have no controll over tick or polling in this backend.
+  if (yieldToWebBrowser) {
+    emscripten_sleep(100);
+  }
+#endif
+}
+
 class Application {
   public:
     // Initialize all or catch errors.
@@ -87,6 +102,9 @@ class Application {
     TextureView GetNextSurfaceTextureView();
     // Substep of Initialize, never expose
     void InitializePipeline();
+
+    // Just for the sake of this example
+    void PlayingWithBuffers();
 
     // Shared data between init and main loop.
     GLFWwindow* window;
@@ -131,7 +149,7 @@ bool Application::Initialize() {
   glfwInit();
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // NO_API bc We don't want OpenGL, we'll use WebGPU instead.
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // No resizing at this step of the guide
-  window = glfwCreateWindow(800, 600, "Learn WebGPU", nullptr, nullptr);
+  window = glfwCreateWindow(640, 480, "Learn WebGPU", nullptr, nullptr);
 
   InstanceDescriptor instanceDesc = {};
 	Instance instance = createInstance(instanceDesc);
@@ -204,6 +222,8 @@ bool Application::Initialize() {
   adapter.release();
 
   InitializePipeline();
+
+  PlayingWithBuffers();
 
   return true;
 }
@@ -414,4 +434,78 @@ void Application::InitializePipeline() {
 
   // We no longer need to access the shader module
   shaderModule.release();
+}
+
+void Application::PlayingWithBuffers() {
+  // Experiment
+  BufferDescriptor bufferDesc = {};
+  bufferDesc.label = "Some GPU-side data buffer";
+  bufferDesc.usage = BufferUsage::CopyDst| BufferUsage::CopySrc;
+  bufferDesc.size = 16;
+  bufferDesc.mappedAtCreation = false;
+  Buffer buffer1 = device.createBuffer(bufferDesc);
+  bufferDesc.label = "Output buffer";
+  bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::MapRead;
+  Buffer buffer2 = device.createBuffer(bufferDesc);
+
+  // Create some CPU-side data buffer of 16 bytes
+  std::vector<uint8_t> numbers(16);
+  for(uint8_t i = 0; i < 16; ++i) {
+    numbers[i] = i;
+  }
+
+  // copy this from numbers (Inside RAM) to buffer1 (VRAM)
+  queue.writeBuffer(buffer1, 0, numbers.data(), numbers.size());
+
+  CommandEncoder encoder = device.createCommandEncoder(Default);
+
+  // After creatin the command encoder
+  encoder.copyBufferToBuffer(buffer1, 0, buffer2, 0, numbers.size());
+
+  CommandBuffer command = encoder.finish(Default);
+  encoder.release();
+  queue.submit(1, &command);
+  command.release();
+
+  // The context shared betweenthis main function and the callback
+  struct Context {
+    Bool ready;
+    Buffer buffer;
+  };
+
+  auto onBuffer2Mapped = [](WGPUBufferMapAsyncStatus status, void* pUserData) {
+    Context* context = reinterpret_cast<Context*>(pUserData);
+    context->ready = true;
+    std::cout << "Buffer2 mapped with status " << status << std::endl;
+    if (status != BufferMapAsyncStatus::Success) return;
+
+    // Get apointer to wherever the driver mapped the GPU memory to the RAM
+    uint8_t* bufferData = (uint8_t*)context->buffer.getMappedRange(0, 16);
+
+    std::cout << "Buffer2 data: [";
+    for (size_t i = 0; i < 16; ++i) {
+      if (i > 0) std::cout << ", ";
+      std::cout << (int)bufferData[i];
+    }
+    std::cout << "]" << std::endl;
+
+    // Then do not forget to unmap the memory
+    context->buffer.unmap();
+  };
+
+  // Create the context instance
+  Context context = {false, buffer2};
+
+  //buffer2.mapAsync(MapMode::Read, 0, 16, onBuffer2Mapped);
+  wgpuBufferMapAsync(buffer2, MapMode::Read, 0, 16, onBuffer2Mapped, reinterpret_cast<void*>(&context));
+  //                                   Pass the address of the Context instance here: ^^^^^^^^^^^^^^^
+
+  while (!context.ready) {
+    //    ^^^^^^^^^^^^^ Use context.ready here instead of ready
+    wgpuPollEvents(device, true /* yieldToBrowser */);
+  }
+
+  // In Terminate()
+  buffer1.release();
+  buffer2.release();
 }
