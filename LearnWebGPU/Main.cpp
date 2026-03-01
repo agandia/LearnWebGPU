@@ -55,34 +55,14 @@ using namespace wgpu;
 // We embbed the shader source here
 const char * shaderSource = R"(
   @vertex
-  fn vs_main(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4<f32> {
-    var pos = array<vec2<f32>, 3>(
-      vec2<f32>(0.0, 0.5),
-      vec2<f32>(-0.5, -0.5),
-      vec2<f32>(0.5, -0.5)
-    );
-    return vec4<f32>(pos[vertexIndex], 0.0, 1.0);
+  fn vs_main(@location(0) in_vertex_position: vec2f ) -> @builtin(position) vec4f {    
+    return vec4f(in_vertex_position, 0.0, 1.0);
   }
   @fragment
-  fn fs_main() -> @location(0) vec4<f32> {
-    return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+  fn fs_main() -> @location(0) vec4f {
+    return vec4f(0.0, 0.4, 1.0, 1.0);
   }
 )";
-
-// We define a function that hides implementation-specific variants of device polling
-void wgpuPollEvents([[maybe_unused]] Device device, [[maybe_unused]] bool yieldToWebBrowser) {
-#if defined(WEBGPU_BACKEND_DAWN)
-  device.tick();
-#elif defined(WEBGPU_BACKEND_WGPU)
-  device.poll(false);
-#elif defined(__EMSCRIPTEN__)
-  // In the Emscripten backend, we yield to the web browser to allow it to process events and avoid freezing the page.
-  // We have no controll over tick or polling in this backend.
-  if (yieldToWebBrowser) {
-    emscripten_sleep(100);
-  }
-#endif
-}
 
 class Application {
   public:
@@ -95,16 +75,17 @@ class Application {
     // Draw a frame and handle events
     void MainLoop();
 
-    // Returns true if the application should keep running, false if it should exit.
+    // Main loop keepalive check.
     bool IsRunning();
 
   private:
     TextureView GetNextSurfaceTextureView();
+
     // Substep of Initialize, never expose
     void InitializePipeline();
-
+    RequiredLimits GetRequiredLimits(Adapter adapter) const;
     // Just for the sake of this example
-    void PlayingWithBuffers();
+    void InitializeBuffers();
 
     // Shared data between init and main loop.
     GLFWwindow* window;
@@ -113,6 +94,8 @@ class Application {
     Surface surface;
     TextureFormat surfaceFormat = TextureFormat::Undefined;
     RenderPipeline pipeline;
+    Buffer vertexBuffer;
+    uint32_t vertexCount;
 
     std::unique_ptr<ErrorCallback> uncapturedErrorCallbackHandle;
 };
@@ -186,7 +169,8 @@ bool Application::Initialize() {
     if (message) std::cout << " (" << message << ")";
     std::cout << std::endl;
     };
-
+  RequiredLimits requiredLimits = GetRequiredLimits(adapter);
+  deviceDesc.requiredLimits = &requiredLimits;  
   device = adapter.requestDevice(deviceDesc);
   std::cout << "Got device: " << device << std::endl;
 
@@ -223,12 +207,13 @@ bool Application::Initialize() {
 
   InitializePipeline();
 
-  PlayingWithBuffers();
+  InitializeBuffers();
 
   return true;
 }
 
 void Application::Terminate() {
+  vertexBuffer.release();
   pipeline.release();
   surface.unconfigure();
   queue.release();
@@ -269,13 +254,16 @@ void Application::MainLoop() {
   renderPassDesc.depthStencilAttachment = nullptr;
   renderPassDesc.timestampWrites = nullptr;
 
-  // Create the render pass and end it immediately, for now we don't draw anything, besides clearing the screen
   RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
 
   // Select which pipeline to use
   renderPass.setPipeline(pipeline);
+
+  // Set vertex buffer while encoding the render pass
+  renderPass.setVertexBuffer(0, vertexBuffer, 0, vertexBuffer.getSize());
+
   // Draw 1 instance of 3 vertices, without an index buffer
-  renderPass.draw(3, 1, 0, 0);
+  renderPass.draw(vertexCount, 1, 0, 0);
 
   renderPass.end();
   renderPass.release();
@@ -333,7 +321,7 @@ TextureView Application::GetNextSurfaceTextureView() {
 #ifndef WEBGPU_BACKEND_WGPU
     // We no longer need the texture, only its view
     // NOTE: with wgpu-native, surface textures must not be manually released
-    //wgpuTextureRelease(surfaceTexture.texture);
+    //Texture(surfaceTexture.texture).release(); // This looks like a leak?
     texture.release();
 #endif // WEBGPU_BACKEND_WGPU
 
@@ -361,13 +349,32 @@ void Application::InitializePipeline() {
   // Create the render pipeline
   RenderPipelineDescriptor pipelineDesc;
 
+  // Configure the vertex pipeline
+  // We use one vertex buffer
+  VertexBufferLayout vertexBufferLayout;
+  VertexAttribute positionAttribute;
+  // For each attrib, describe its layout, aka how to interpret the data
+  // Corresponds to the @location(0) in the vertex shader
+  positionAttribute.shaderLocation = 0;
+  // The vertex shader expects a vec2f, which is 2 32-bit floats
+  positionAttribute.format = VertexFormat::Float32x2;
+  // Index of the first component
+  positionAttribute.offset = 0;
+
+  vertexBufferLayout.attributeCount = 1;
+  vertexBufferLayout.attributes = &positionAttribute;
+
+  // Common to attributes from the same buffer
+  vertexBufferLayout.arrayStride = 2 * sizeof(float); // Each vertex is a vec2f, so 2 floats
+  vertexBufferLayout.stepMode = VertexStepMode::Vertex; // We move to the next vertex for each vertex shader invocation
+
   // We do not use any vertex buffer for this simple example.
-  pipelineDesc.vertex.bufferCount = 0;
-  pipelineDesc.vertex.buffers = nullptr;
+  pipelineDesc.vertex.bufferCount = 1;
+  pipelineDesc.vertex.buffers = &vertexBufferLayout;
 
   // NB: We define the 'shaderModule' in the second part of this chapter.
-// Here we tell that the programmable vertex shader stage is described
-// by the function called 'vs_main' in that module.
+  // Here we tell that the programmable vertex shader stage is described
+  // by the function called 'vs_main' in that module.
   pipelineDesc.vertex.module = shaderModule;
   pipelineDesc.vertex.entryPoint = "vs_main";
   pipelineDesc.vertex.constantCount = 0;
@@ -436,76 +443,57 @@ void Application::InitializePipeline() {
   shaderModule.release();
 }
 
-void Application::PlayingWithBuffers() {
-  // Experiment
+RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
+  // Get adapter supported limits, in case we need them
+  SupportedLimits supportedLimits;
+  adapter.getLimits(&supportedLimits);
+
+  // NOTE: is "Default" just an alias for a default initializer {} ?
+  RequiredLimits requiredLimits = Default;
+  requiredLimits.limits = supportedLimits.limits; // Start with the supported limits as a base, then override the ones we want to require
+
+  // We use at most 1 vertex attribute for now
+  requiredLimits.limits.maxVertexAttributes = 1;
+  // We should also tell that we use 1 vertex buffer
+  requiredLimits.limits.maxVertexBuffers = 1;
+  // Maximum size of a buffer is 6 vertices of 2 float each.
+  requiredLimits.limits.maxBufferSize = 6 * 2 * sizeof(float);
+  // Maximum stride between 2 consecutive vertices in the vertex buffer
+  requiredLimits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);
+
+  // These two limits are different because they are "minimum" limits
+  requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
+  requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
+
+  return requiredLimits;
+}
+
+void Application::InitializeBuffers() {
+  
+  // Vertex Buffer Data
+  std::vector<float> vertexData = {
+    // For our example we define one triangle
+    -0.5f, -0.5f, // Vertex 1: position (x, y)
+     0.5f, -0.5f, // Vertex 2: position (x, y)
+     0.0f,  0.5f, // Vertex 3: position (x, y)
+
+    // And a second triangle
+    -0.55f, -0.5f,// Vertex 1: position (x, y)
+    -0.05f,  0.5f,// Vertex 2: position (x, y)
+    -0.55f,  0.5f // Vertex 3: position (x, y)
+
+  };
+  vertexCount = static_cast<uint32_t>(vertexData.size() / 2); // Each vertex has 2 components (x, y)
+
+  // Create vertex Buffer
   BufferDescriptor bufferDesc = {};
   bufferDesc.label = "Some GPU-side data buffer";
-  bufferDesc.usage = BufferUsage::CopyDst| BufferUsage::CopySrc;
-  bufferDesc.size = 16;
+  bufferDesc.usage = BufferUsage::CopyDst| BufferUsage::Vertex;
+  bufferDesc.size = vertexData.size() * sizeof(float);
   bufferDesc.mappedAtCreation = false;
-  Buffer buffer1 = device.createBuffer(bufferDesc);
-  bufferDesc.label = "Output buffer";
-  bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::MapRead;
-  Buffer buffer2 = device.createBuffer(bufferDesc);
-
-  // Create some CPU-side data buffer of 16 bytes
-  std::vector<uint8_t> numbers(16);
-  for(uint8_t i = 0; i < 16; ++i) {
-    numbers[i] = i;
-  }
+  vertexBuffer = device.createBuffer(bufferDesc);
 
   // copy this from numbers (Inside RAM) to buffer1 (VRAM)
-  queue.writeBuffer(buffer1, 0, numbers.data(), numbers.size());
+  queue.writeBuffer(vertexBuffer, 0, vertexData.data(), bufferDesc.size);
 
-  CommandEncoder encoder = device.createCommandEncoder(Default);
-
-  // After creatin the command encoder
-  encoder.copyBufferToBuffer(buffer1, 0, buffer2, 0, numbers.size());
-
-  CommandBuffer command = encoder.finish(Default);
-  encoder.release();
-  queue.submit(1, &command);
-  command.release();
-
-  // The context shared betweenthis main function and the callback
-  struct Context {
-    Bool ready;
-    Buffer buffer;
-  };
-
-  auto onBuffer2Mapped = [](WGPUBufferMapAsyncStatus status, void* pUserData) {
-    Context* context = reinterpret_cast<Context*>(pUserData);
-    context->ready = true;
-    std::cout << "Buffer2 mapped with status " << status << std::endl;
-    if (status != BufferMapAsyncStatus::Success) return;
-
-    // Get apointer to wherever the driver mapped the GPU memory to the RAM
-    uint8_t* bufferData = (uint8_t*)context->buffer.getMappedRange(0, 16);
-
-    std::cout << "Buffer2 data: [";
-    for (size_t i = 0; i < 16; ++i) {
-      if (i > 0) std::cout << ", ";
-      std::cout << (int)bufferData[i];
-    }
-    std::cout << "]" << std::endl;
-
-    // Then do not forget to unmap the memory
-    context->buffer.unmap();
-  };
-
-  // Create the context instance
-  Context context = {false, buffer2};
-
-  //buffer2.mapAsync(MapMode::Read, 0, 16, onBuffer2Mapped);
-  wgpuBufferMapAsync(buffer2, MapMode::Read, 0, 16, onBuffer2Mapped, reinterpret_cast<void*>(&context));
-  //                                   Pass the address of the Context instance here: ^^^^^^^^^^^^^^^
-
-  while (!context.ready) {
-    //    ^^^^^^^^^^^^^ Use context.ready here instead of ready
-    wgpuPollEvents(device, true /* yieldToBrowser */);
-  }
-
-  // In Terminate()
-  buffer1.release();
-  buffer2.release();
 }
