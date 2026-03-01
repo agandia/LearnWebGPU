@@ -21,12 +21,28 @@ struct VertexOutput {
 	@location(0) color: vec3f,
 };
 
+/**
+ * A structure holding the value of our uniforms
+ */
+struct MyUniforms {
+    color: vec4f,
+		time: f32,
+};
+
+@group(0) @binding(0) var<uniform> uMyUniforms: MyUniforms; // A uniform struct variable that we can set from the CPU
+
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
 	//                         ^^^^^^^^^^^^ We return a custom struct
 	var out: VertexOutput; // create the output struct
 	let ratio = 640.0 / 480.0; // The width and height of the target surface
-	let offset = vec2f(-0.6875, -0.463); // The offset that we want to apply to the position
+
+	// Simple update based on time and sine/cosine functions to create a nice animation
+	var offset = vec2f(-0.6875, -0.463); // The offset that we want to apply to the position
+
+	let uTime = uMyUniforms.time; // Get the time value from the uniform
+	offset += vec2f(cos(uTime), sin(uTime)); // Update the offset based on time
+
 	out.position = vec4f(in.position.x + offset.x, (in.position.y + offset.y) * ratio, 0.0, 1.0);
 	out.color = in.color; // forward the color attribute to the fragment shader
 	return out;
@@ -34,6 +50,11 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-	//     ^^^^^^^^^^^^^^^^ Use for instance the same struct as what the vertex outputs
-	return vec4f(in.color, 1.0); // use the interpolated color coming from the vertex shader
+	// We multiply the scene's color with our global uniform (this is one
+  // possible use of the color uniform, among many others).
+  let color = in.color * uMyUniforms.color.rgb;
+
+	// Gamma-correction
+	let linear_color = pow(color, vec3f(2.2));
+	return vec4f(linear_color, 1.0); // use the interpolated color coming from the vertex shader
 }
