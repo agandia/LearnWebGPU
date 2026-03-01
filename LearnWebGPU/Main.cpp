@@ -79,11 +79,12 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
-  var out: VertexOutput;
-  out.position = vec4f(in.position, 0.0, 1.0);
-  out.color = in.color;
+  var out: VertexOutput; // create the output struct
+	let ratio = 640.0 / 480.0; // The width and height of the target surface
+	out.position = vec4f(in.position.x, in.position.y * ratio, 0.0, 1.0);
+	out.color = in.color; // forward the color attribute to the fragment shader
 
-  return out;
+	return out;
 }
 
 @fragment
@@ -122,8 +123,9 @@ class Application {
     Surface surface;
     TextureFormat surfaceFormat = TextureFormat::Undefined;
     RenderPipeline pipeline;
-    Buffer vertexBuffer;
-    uint32_t vertexCount;
+    Buffer pointBuffer;
+    Buffer indexBuffer;
+    uint32_t indexCount;
 
     std::unique_ptr<ErrorCallback> uncapturedErrorCallbackHandle;
 };
@@ -241,7 +243,8 @@ bool Application::Initialize() {
 }
 
 void Application::Terminate() {
-  vertexBuffer.release();
+  pointBuffer.release();
+  indexBuffer.release();
   pipeline.release();
   surface.unconfigure();
   queue.release();
@@ -288,10 +291,13 @@ void Application::MainLoop() {
   renderPass.setPipeline(pipeline);
 
   // Set vertex buffer while encoding the render pass
-  renderPass.setVertexBuffer(0, vertexBuffer, 0, vertexBuffer.getSize());
+  renderPass.setVertexBuffer(0, pointBuffer, 0, pointBuffer.getSize());
+
+  // The second argument must correspond to the choice of uint16_t or uint32_t when creating the index buffer, and to the index format specified in the pipeline.
+  renderPass.setIndexBuffer(indexBuffer, IndexFormat::Uint16, 0, indexBuffer.getSize());
 
   // Draw 1 instance of 3 vertices, without an index buffer
-  renderPass.draw(vertexCount, 1, 0, 0);
+  renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
 
   renderPass.end();
   renderPass.release();
@@ -505,28 +511,42 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
 
 void Application::InitializeBuffers() {
   
-  // Vertex Buffer Data
-  std::vector<float> vertexData = {
-    // x0,    y0,  r0,  g0,  b0
-    -0.5,   -0.5, 1.0, 0.0, 0.0,
-    +0.5,   -0.5, 0.0, 1.0, 0.0,
-    +0.0,   +0.5, 0.0, 0.0, 1.0,
-    -0.55f, -0.5, 1.0, 1.0, 0.0,
-    -0.05f, +0.5, 1.0, 0.0, 1.0,
-    -0.55f, +0.5, 0.0, 1.0, 1.0
+  // Define point data
+  // The de-duplicated list of point positions
+  std::vector<float> pointData = {
+    // x,   y,     r,   g,   b
+    -0.5, -0.5,   1.0, 0.0, 0.0, // Point #0
+    +0.5, -0.5,   0.0, 1.0, 0.0, // Point #1
+    +0.5, +0.5,   0.0, 0.0, 1.0, // Point #2
+    -0.5, +0.5,   1.0, 1.0, 0.0  // Point #3
   };
 
-  vertexCount = static_cast<uint32_t>(vertexData.size() / 5);
+  // Define index data
+  // This is a list of indices referencing positions in the pointData
+  std::vector<uint16_t> indexData = {
+      0, 1, 2, // Triangle #0 connects points #0, #1 and #2
+      0, 2, 3  // Triangle #1 connects points #0, #2 and #3
+  };
 
-  // Create vertex Buffer
-  BufferDescriptor bufferDesc = {};
-  bufferDesc.label = "Some GPU-side data buffer";
-  bufferDesc.usage = BufferUsage::CopyDst| BufferUsage::Vertex;
-  bufferDesc.size = vertexData.size() * sizeof(float);
+  indexCount = static_cast<uint32_t>(indexData.size());
+
+  // Create vertex buffer
+  BufferDescriptor bufferDesc;
+  bufferDesc.size = pointData.size() * sizeof(float);
+  bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Vertex; // Vertex usage here!
   bufferDesc.mappedAtCreation = false;
-  vertexBuffer = device.createBuffer(bufferDesc);
+  pointBuffer = device.createBuffer(bufferDesc);
 
-  // copy this from numbers (Inside RAM) to buffer1 (VRAM)
-  queue.writeBuffer(vertexBuffer, 0, vertexData.data(), bufferDesc.size);
+  // Upload geometry data to the buffer
+  queue.writeBuffer(pointBuffer, 0, pointData.data(), bufferDesc.size);
+
+  // Create index buffer
+  // (we reuse the bufferDesc initialized for the pointBuffer)
+  bufferDesc.size = indexData.size() * sizeof(uint16_t);
+  bufferDesc.size = (bufferDesc.size + 3) & ~3; // round up to the next multiple of 4
+  bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Index;
+  indexBuffer = device.createBuffer(bufferDesc);
+
+  queue.writeBuffer(indexBuffer, 0, indexData.data(), bufferDesc.size);
 
 }
