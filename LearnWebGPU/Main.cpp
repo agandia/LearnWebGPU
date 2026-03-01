@@ -30,9 +30,6 @@
 * exercise on my end.
 */
 
-// NOTE: Use for debug only.
-//#include "webgpu-utils.h"
-
 // Replaced default <webgpu/webgpu.hpp> with the webgpu.hpp version,
 // containing some syntactic sugar and C++ wrappers
 #define WEBGPU_CPP_IMPLEMENTATION
@@ -49,49 +46,9 @@
 #include <cassert>
 #include <vector>
 
-// use wgpu namespace for convenience
+#include "ResourceManager.h"
+
 using namespace wgpu;
-
-// We embbed the shader source here
-const char * shaderSource = R"(
-/**
- * A structure with fields labeled with vertex attribute locations can be used
- * as input to the entry point of a shader.
- */
-struct VertexInput {
-	@location(0) position: vec2f,
-	@location(1) color: vec3f,
-};
-
-/**
- * A structure with fields labeled with builtins and locations can also be used
- * as *output* of the vertex shader, which is also the input of the fragment
- * shader.
- */
-struct VertexOutput {
-	@builtin(position) position: vec4f,
-	// The location here does not refer to a vertex attribute, it just means
-	// that this field must be handled by the rasterizer.
-	// (It can also refer to another field of another struct that would be used
-	// as input to the fragment shader.)
-	@location(0) color: vec3f,
-};
-
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-  var out: VertexOutput; // create the output struct
-	let ratio = 640.0 / 480.0; // The width and height of the target surface
-	out.position = vec4f(in.position.x, in.position.y * ratio, 0.0, 1.0);
-	out.color = in.color; // forward the color attribute to the fragment shader
-
-	return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  return vec4f(in.color, 1.0);
-}
-)";
 
 class Application {
   public:
@@ -363,22 +320,16 @@ TextureView Application::GetNextSurfaceTextureView() {
 }
 
 void Application::InitializePipeline() {
-  // Load shader modules
-  ShaderModuleDescriptor shaderDesc;
-#ifdef WEBGPU_BACKEND_WGPU
-  shaderDesc.hintCount = 0;
-  shaderDesc.hints = nullptr;
-#endif // WEBGPU_BACKEND_WGPU
 
-  // We use the extension mechanism to specify the WGSL part of the shader module descriptor
-  ShaderModuleWGSLDescriptor shaderCodeDesc;
-  // Set the chained struct's header
-  shaderCodeDesc.chain.next = nullptr;
-  shaderCodeDesc.chain.sType = SType::ShaderModuleWGSLDescriptor;
-  // Connect the chain
-  shaderDesc.nextInChain = &shaderCodeDesc.chain;
-  shaderCodeDesc.code = shaderSource;
-  ShaderModule shaderModule = device.createShaderModule(shaderDesc);
+  std::cout << "Creating shader module..." << std::endl;
+  ShaderModule shaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/shader.wgsl", device);
+  std::cout << "Shader module: " << shaderModule << std::endl;
+
+  // Check for errors
+  if (shaderModule == nullptr) {
+    std::cerr << "Could not load shader!" << std::endl;
+    exit(1);
+  }
 
   // Create the render pipeline
   RenderPipelineDescriptor pipelineDesc;
@@ -495,7 +446,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   // We should also tell that we use 1 vertex buffer
   requiredLimits.limits.maxVertexBuffers = 1;
   // Maximum size of a buffer is 6 vertices of 5 float each.
-  requiredLimits.limits.maxBufferSize = 6 * 5 * sizeof(float);
+  requiredLimits.limits.maxBufferSize = 15 * 5 * sizeof(float);
   // Maximum stride between 2 consecutive vertices in the vertex buffer
   requiredLimits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
 
@@ -511,22 +462,18 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
 
 void Application::InitializeBuffers() {
   
-  // Define point data
-  // The de-duplicated list of point positions
-  std::vector<float> pointData = {
-    // x,   y,     r,   g,   b
-    -0.5, -0.5,   1.0, 0.0, 0.0, // Point #0
-    +0.5, -0.5,   0.0, 1.0, 0.0, // Point #1
-    +0.5, +0.5,   0.0, 0.0, 1.0, // Point #2
-    -0.5, +0.5,   1.0, 1.0, 0.0  // Point #3
-  };
+  // Define data vectors, but without filling them in
+  std::vector<float> pointData;
+  std::vector<uint16_t> indexData;
 
-  // Define index data
-  // This is a list of indices referencing positions in the pointData
-  std::vector<uint16_t> indexData = {
-      0, 1, 2, // Triangle #0 connects points #0, #1 and #2
-      0, 2, 3  // Triangle #1 connects points #0, #2 and #3
-  };
+  // Here we use the new 'loadGeometry' function:
+  bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/webgpu.txt", pointData, indexData);
+
+  // Check for errors
+  if (!success) {
+    std::cerr << "Could not load geometry!" << std::endl;
+    exit(1);
+  }
 
   indexCount = static_cast<uint32_t>(indexData.size());
 

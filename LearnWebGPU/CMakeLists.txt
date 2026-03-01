@@ -13,19 +13,38 @@ else()
 endif()
 # In both cases, we can now link to the 'glfw' target
 
+# Include webgpu directory, to define the "webgpu" target."
+add_subdirectory(webgpu)
 # Add a little extension of glfw that connects it to WebGPU
 add_subdirectory(glfw3webgpu)
 
-# Include webgpu directory, to define the "webgpu" target."
-add_subdirectory(webgpu)
 
 # Add source to this project's executable.
-add_executable (LearnWebGPU "Main.cpp" "webgpu-utils.h" "webgpu-utils.cpp")
+add_executable (LearnWebGPU "Main.cpp" "ResourceManager.h" "ResourceManager.cpp")
 
 # Add the "webgpu" target as a dependency of the executable
 target_link_libraries(LearnWebGPU PRIVATE webgpu glfw glfw3webgpu)
 
-# The appliucation's binary must find wgpu.dll or libwgpu.so at runtime,
+# We add an option to enable different settings when developing the app than
+# when distributing it.
+option(DEV_MODE "Set up development helper settings" ON)
+
+if(DEV_MODE)
+    # In dev mode, we load resources from the source tree, so that when we
+    # dynamically edit resources (like shaders), these are correctly
+    # versionned.
+    target_compile_definitions(LearnWebGPU PRIVATE
+        RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources"
+    )
+else()
+    # In release mode, we just load resources relatively to wherever the
+    # executable is launched from, so that the binary is portable
+    target_compile_definitions(LearnWebGPU PRIVATE
+        RESOURCE_DIR="./resources"
+    )
+endif()
+
+# The application's binary must find wgpu.dll or libwgpu.so at runtime,
 # so we copy it (called WPU_RUNTIME_LIB in general)
 # next to the binary
 target_copy_webgpu_binaries(LearnWebGPU)
@@ -59,7 +78,10 @@ if (EMSCRIPTEN)
   # Generate a full webpage rather than a simple WebAssembly module.
   set_target_properties(LearnWebGPU PROPERTIES SUFFIX ".html")
   # Enable the use of emscripten_sleep()
-	target_link_options(App PRIVATE -sASYNCIFY)
+	target_link_options(LearnWebGPU PRIVATE
+		-sASYNCIFY
+		--preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+	)
 endif()
 
 # TODO: Add tests and install targets if needed.
