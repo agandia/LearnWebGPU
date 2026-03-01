@@ -54,14 +54,42 @@ using namespace wgpu;
 
 // We embbed the shader source here
 const char * shaderSource = R"(
-  @vertex
-  fn vs_main(@location(0) in_vertex_position: vec2f ) -> @builtin(position) vec4f {    
-    return vec4f(in_vertex_position, 0.0, 1.0);
-  }
-  @fragment
-  fn fs_main() -> @location(0) vec4f {
-    return vec4f(0.0, 0.4, 1.0, 1.0);
-  }
+/**
+ * A structure with fields labeled with vertex attribute locations can be used
+ * as input to the entry point of a shader.
+ */
+struct VertexInput {
+	@location(0) position: vec2f,
+	@location(1) color: vec3f,
+};
+
+/**
+ * A structure with fields labeled with builtins and locations can also be used
+ * as *output* of the vertex shader, which is also the input of the fragment
+ * shader.
+ */
+struct VertexOutput {
+	@builtin(position) position: vec4f,
+	// The location here does not refer to a vertex attribute, it just means
+	// that this field must be handled by the rasterizer.
+	// (It can also refer to another field of another struct that would be used
+	// as input to the fragment shader.)
+	@location(0) color: vec3f,
+};
+
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  out.position = vec4f(in.position, 0.0, 1.0);
+  out.color = in.color;
+
+  return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  return vec4f(in.color, 1.0);
+}
 )";
 
 class Application {
@@ -244,7 +272,7 @@ void Application::MainLoop() {
   renderPassColorAttachment.resolveTarget = nullptr;
   renderPassColorAttachment.loadOp = LoadOp::Clear;
   renderPassColorAttachment.storeOp = StoreOp::Store;
-  renderPassColorAttachment.clearValue = WGPUColor{ 0.9, 0.1, 0.2, 1.0 };
+  renderPassColorAttachment.clearValue = WGPUColor{ 0.05, 0.05, 0.05, 1.0 };
 #ifndef WEBGPU_BACKEND_WGPU
   renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 #endif // ! WGPU BACKEND
@@ -352,20 +380,24 @@ void Application::InitializePipeline() {
   // Configure the vertex pipeline
   // We use one vertex buffer
   VertexBufferLayout vertexBufferLayout;
-  VertexAttribute positionAttribute;
+  // But we have now 2 different attributes
+  std::vector<VertexAttribute> vertexAttribs(2);
+
   // For each attrib, describe its layout, aka how to interpret the data
   // Corresponds to the @location(0) in the vertex shader
-  positionAttribute.shaderLocation = 0;
-  // The vertex shader expects a vec2f, which is 2 32-bit floats
-  positionAttribute.format = VertexFormat::Float32x2;
-  // Index of the first component
-  positionAttribute.offset = 0;
+  vertexAttribs[0].shaderLocation = 0; // @location(0)
+  vertexAttribs[0].format = VertexFormat::Float32x2;
+  vertexAttribs[0].offset = 0;
 
-  vertexBufferLayout.attributeCount = 1;
-  vertexBufferLayout.attributes = &positionAttribute;
+  vertexAttribs[1].shaderLocation = 1; // @location(1)
+  vertexAttribs[1].format = VertexFormat::Float32x3; // different type!
+  vertexAttribs[1].offset = 2 * sizeof(float); // non null offset!
+
+  vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
+  vertexBufferLayout.attributes = vertexAttribs.data();
 
   // Common to attributes from the same buffer
-  vertexBufferLayout.arrayStride = 2 * sizeof(float); // Each vertex is a vec2f, so 2 floats
+  vertexBufferLayout.arrayStride = 5 * sizeof(float); // Each vertex is a vec2f, so 2 floats
   vertexBufferLayout.stepMode = VertexStepMode::Vertex; // We move to the next vertex for each vertex shader invocation
 
   // We do not use any vertex buffer for this simple example.
@@ -448,18 +480,21 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   SupportedLimits supportedLimits;
   adapter.getLimits(&supportedLimits);
 
-  // NOTE: is "Default" just an alias for a default initializer {} ?
+  // NOTE: is "Default" just an alias for a default initializer {} ? It crashes if I don't copy the supported limits manually.
   RequiredLimits requiredLimits = Default;
   requiredLimits.limits = supportedLimits.limits; // Start with the supported limits as a base, then override the ones we want to require
 
-  // We use at most 1 vertex attribute for now
-  requiredLimits.limits.maxVertexAttributes = 1;
+  // We use at most 2 vertex attribute for now
+  requiredLimits.limits.maxVertexAttributes = 2;
   // We should also tell that we use 1 vertex buffer
   requiredLimits.limits.maxVertexBuffers = 1;
-  // Maximum size of a buffer is 6 vertices of 2 float each.
-  requiredLimits.limits.maxBufferSize = 6 * 2 * sizeof(float);
+  // Maximum size of a buffer is 6 vertices of 5 float each.
+  requiredLimits.limits.maxBufferSize = 6 * 5 * sizeof(float);
   // Maximum stride between 2 consecutive vertices in the vertex buffer
-  requiredLimits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);
+  requiredLimits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
+
+  // There is a maximum of 3 float forwarded from vertex to fragment shader
+  requiredLimits.limits.maxInterStageShaderComponents = 3;
 
   // These two limits are different because they are "minimum" limits
   requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
@@ -472,18 +507,16 @@ void Application::InitializeBuffers() {
   
   // Vertex Buffer Data
   std::vector<float> vertexData = {
-    // For our example we define one triangle
-    -0.5f, -0.5f, // Vertex 1: position (x, y)
-     0.5f, -0.5f, // Vertex 2: position (x, y)
-     0.0f,  0.5f, // Vertex 3: position (x, y)
-
-    // And a second triangle
-    -0.55f, -0.5f,// Vertex 1: position (x, y)
-    -0.05f,  0.5f,// Vertex 2: position (x, y)
-    -0.55f,  0.5f // Vertex 3: position (x, y)
-
+    // x0,    y0,  r0,  g0,  b0
+    -0.5,   -0.5, 1.0, 0.0, 0.0,
+    +0.5,   -0.5, 0.0, 1.0, 0.0,
+    +0.0,   +0.5, 0.0, 0.0, 1.0,
+    -0.55f, -0.5, 1.0, 1.0, 0.0,
+    -0.05f, +0.5, 1.0, 0.0, 1.0,
+    -0.55f, +0.5, 0.0, 1.0, 1.0
   };
-  vertexCount = static_cast<uint32_t>(vertexData.size() / 2); // Each vertex has 2 components (x, y)
+
+  vertexCount = static_cast<uint32_t>(vertexData.size() / 5);
 
   // Create vertex Buffer
   BufferDescriptor bufferDesc = {};
