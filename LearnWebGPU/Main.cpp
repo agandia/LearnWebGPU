@@ -24,14 +24,14 @@
  * SOFTWARE.
  */
 
-/**
-* Although based on the licensed implementation above, this file contains modifications
-* that are not part of the original work. These modifications are a result of a learning
-* exercise on my end.
-*/
+ /**
+ * Although based on the licensed implementation above, this file contains modifications
+ * that are not part of the original work. These modifications are a result of a learning
+ * exercise on my end.
+ */
 
-// Replaced default <webgpu/webgpu.hpp> with the webgpu.hpp version,
-// containing some syntactic sugar and C++ wrappers
+ // Replaced default <webgpu/webgpu.hpp> with the webgpu.hpp version,
+ // containing some syntactic sugar and C++ wrappers
 #define WEBGPU_CPP_IMPLEMENTATION
 #include "webgpu/webgpu.hpp"
 
@@ -52,55 +52,57 @@
 using namespace wgpu;
 
 class Application {
-  public:
-    // Initialize all or catch errors.
-    bool Initialize();
+public:
+  // Initialize all or catch errors.
+  bool Initialize();
 
-    // Clean everything
-    void Terminate();
+  // Clean everything
+  void Terminate();
 
-    // Draw a frame and handle events
-    void MainLoop();
+  // Draw a frame and handle events
+  void MainLoop();
 
-    // Main loop keepalive check.
-    bool IsRunning();
+  // Main loop keepalive check.
+  bool IsRunning();
 
-  private:
+private:
 
-    /**
-    * The same structure as in the shader, replicated in C++
-    */
-    struct MyUniforms {
-      std::array<float, 4> color;  // or float color[4]
-      float time;
-      float _pad[3];
-    };
-    // Have the compiler check byte alignment
-    static_assert(sizeof(MyUniforms) % 16 == 0);
+  /**
+  * The same structure as in the shader, replicated in C++
+  */
+  struct MyUniforms {
+    std::array<float, 4> color;  // or float color[4]
+    float time;
+    float _pad[3];
+  };
+  // Have the compiler check byte alignment
+  static_assert(sizeof(MyUniforms) % 16 == 0);
 
-    TextureView GetNextSurfaceTextureView();
+  TextureView GetNextSurfaceTextureView();
+  TextureView GetDepthTextureView();
 
-    void InitializePipeline();
-    RequiredLimits GetRequiredLimits(Adapter adapter) const;    
-    void InitializeBuffers();
-    void InitializeBindGroups();
+  void InitializePipeline();
+  RequiredLimits GetRequiredLimits(Adapter adapter) const;
+  void InitializeBuffers();
+  void InitializeBindGroups();
 
-    // Shared data between init and main loop.
-    GLFWwindow* window;
-    Device device;
-    Queue queue;
-    Surface surface;
-    TextureFormat surfaceFormat = TextureFormat::Undefined;
-    RenderPipeline pipeline;
-    Buffer pointBuffer;
-    Buffer indexBuffer;
-    Buffer uniformBuffer;
-    uint32_t indexCount;
-    BindGroup bindGroup;
-    PipelineLayout layout;
-    BindGroupLayout bindGroupLayout;
+  // Shared data between init and main loop.
+  GLFWwindow* window;
+  Device device;
+  Queue queue;
+  Surface surface;
+  TextureFormat surfaceFormat = TextureFormat::Undefined;
+  TextureFormat depthTextureFormat = TextureFormat::Depth24Plus;
+  RenderPipeline pipeline;
+  Buffer pointBuffer;
+  Buffer indexBuffer;
+  Buffer uniformBuffer;
+  uint32_t indexCount;
+  BindGroup bindGroup;
+  PipelineLayout layout;
+  BindGroupLayout bindGroupLayout;
 
-    std::unique_ptr<ErrorCallback> uncapturedErrorCallbackHandle;
+  std::unique_ptr<ErrorCallback> uncapturedErrorCallbackHandle;
 };
 
 int main(int, char**)
@@ -141,7 +143,7 @@ bool Application::Initialize() {
   Instance instance = createInstance();
 #else
   InstanceDescriptor instanceDesc = {};
-	Instance instance = createInstance(instanceDesc);
+  Instance instance = createInstance(instanceDesc);
 #endif
   // Check if the instance was created successfully
   if (!instance) {
@@ -175,12 +177,12 @@ bool Application::Initialize() {
     if (message) std::cout << " (" << message << ")";
     std::cout << std::endl;
     };
-  
+
 #ifdef __EMSCRIPTEN__
   deviceDesc.requiredLimits = nullptr;
 #else
   RequiredLimits requiredLimits = GetRequiredLimits(adapter);
-  deviceDesc.requiredLimits = &requiredLimits;  
+  deviceDesc.requiredLimits = &requiredLimits;
 #endif
 
   device = adapter.requestDevice(deviceDesc);
@@ -192,7 +194,7 @@ bool Application::Initialize() {
     if (message) std::cout << " (" << message << ")";
     std::cout << std::endl;
     });
-  
+
   queue = device.getQueue();
 
   // We configure the surface
@@ -273,9 +275,31 @@ void Application::MainLoop() {
   renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 #endif // ! WGPU BACKEND
 
+  // We now add a depth/stencil attachment:
+  RenderPassDepthStencilAttachment depthStencilAttachment = {};
+  // Setup depth/stencil attachment
+  TextureView depthTextureView = GetDepthTextureView();
+  // The view of the depth texture
+  depthStencilAttachment.view = depthTextureView;
+
+  // The initial value of the depth buffer, meaning "far"
+  depthStencilAttachment.depthClearValue = 1.0f;
+  // Operation settings comparable to the color attachment
+  depthStencilAttachment.depthLoadOp = LoadOp::Clear;
+  depthStencilAttachment.depthStoreOp = StoreOp::Store;
+  // we could turn off writing to the depth buffer globally here
+  depthStencilAttachment.depthReadOnly = false;
+
+  // Stencil setup, mandatory but unused
+  depthStencilAttachment.stencilClearValue = 0;
+  depthStencilAttachment.stencilLoadOp = LoadOp::Clear;
+  depthStencilAttachment.stencilStoreOp = StoreOp::Store;
+  depthStencilAttachment.stencilReadOnly = true;
+
+
   renderPassDesc.colorAttachmentCount = 1;
   renderPassDesc.colorAttachments = &renderPassColorAttachment;
-  renderPassDesc.depthStencilAttachment = nullptr;
+  renderPassDesc.depthStencilAttachment = &depthStencilAttachment;
   renderPassDesc.timestampWrites = nullptr;
 
   RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
@@ -311,6 +335,7 @@ void Application::MainLoop() {
 
   // At the end of the frame
   targetView.release();
+  depthTextureView.release();
 #ifndef __EMSCRIPTEN__
   surface.present();
 #endif
@@ -328,34 +353,61 @@ bool Application::IsRunning() {
 }
 
 TextureView Application::GetNextSurfaceTextureView() {
-    // Get the surface Texture
-    SurfaceTexture surfaceTexture;
-    surface.getCurrentTexture(&surfaceTexture);
-    if (surfaceTexture.status != SurfaceGetCurrentTextureStatus::Success) {
-        return nullptr;
-    }
-    Texture texture = surfaceTexture.texture;
+  // Get the surface Texture
+  SurfaceTexture surfaceTexture;
+  surface.getCurrentTexture(&surfaceTexture);
+  if (surfaceTexture.status != SurfaceGetCurrentTextureStatus::Success) {
+    return nullptr;
+  }
+  Texture texture = surfaceTexture.texture;
 
-    // Create a view for this surface texture
-    TextureViewDescriptor viewDescriptor;
-    viewDescriptor.label = "Surface Texture View";
-    viewDescriptor.format = texture.getFormat();
-    viewDescriptor.dimension = TextureViewDimension::_2D;
-    viewDescriptor.baseMipLevel = 0;
-    viewDescriptor.mipLevelCount = 1;
-    viewDescriptor.baseArrayLayer = 0;
-    viewDescriptor.arrayLayerCount = 1;
-    viewDescriptor.aspect = TextureAspect::All;
-    TextureView targetView = texture.createView(viewDescriptor);
+  // Create a view for this surface texture
+  TextureViewDescriptor viewDescriptor;
+  viewDescriptor.label = "Surface Texture View";
+  viewDescriptor.format = texture.getFormat();
+  viewDescriptor.dimension = TextureViewDimension::_2D;
+  viewDescriptor.baseMipLevel = 0;
+  viewDescriptor.mipLevelCount = 1;
+  viewDescriptor.baseArrayLayer = 0;
+  viewDescriptor.arrayLayerCount = 1;
+  viewDescriptor.aspect = TextureAspect::All;
+  TextureView targetView = texture.createView(viewDescriptor);
 
 #ifndef WEBGPU_BACKEND_WGPU
-    // We no longer need the texture, only its view
-    // NOTE: with wgpu-native, surface textures must not be manually released
-    //Texture(surfaceTexture.texture).release(); // This looks like a leak?
-    texture.release();
+  // We no longer need the texture, only its view
+  // NOTE: with wgpu-native, surface textures must not be manually released
+  //Texture(surfaceTexture.texture).release(); // This looks like a leak?
+  texture.release();
 #endif // WEBGPU_BACKEND_WGPU
 
-    return targetView;
+  return targetView;
+}
+
+TextureView Application::GetDepthTextureView() {
+  // Create the depth texture
+  TextureDescriptor depthTextureDesc;
+  depthTextureDesc.dimension = TextureDimension::_2D;
+  depthTextureDesc.format = depthTextureFormat;
+  depthTextureDesc.mipLevelCount = 1;
+  depthTextureDesc.sampleCount = 1;
+  depthTextureDesc.size = { 640, 480, 1 };
+  depthTextureDesc.usage = TextureUsage::RenderAttachment;
+  depthTextureDesc.viewFormatCount = 1;
+  depthTextureDesc.viewFormats = (WGPUTextureFormat*)&depthTextureFormat;
+  Texture depthTexture = device.createTexture(depthTextureDesc);
+
+  // Create the view of the depth texture manipulated by the rasterizer
+  TextureViewDescriptor depthTextureViewDesc;
+  depthTextureViewDesc.aspect = TextureAspect::DepthOnly;
+  depthTextureViewDesc.baseArrayLayer = 0;
+  depthTextureViewDesc.arrayLayerCount = 1;
+  depthTextureViewDesc.baseMipLevel = 0;
+  depthTextureViewDesc.mipLevelCount = 1;
+  depthTextureViewDesc.dimension = TextureViewDimension::_2D;
+  depthTextureViewDesc.format = depthTextureFormat;
+  TextureView depthTextureView = depthTexture.createView(depthTextureViewDesc);
+
+  return depthTextureView;
 }
 
 void Application::InitializePipeline() {
@@ -452,8 +504,16 @@ void Application::InitializePipeline() {
   fragmentState.targets = &colorTarget;
   pipelineDesc.fragment = &fragmentState;
 
-  // We do not use stencil/depth testing for now
-  pipelineDesc.depthStencil = nullptr;
+  // Setup depth state
+  DepthStencilState depthStencilState = Default;
+  depthStencilState.depthCompare = CompareFunction::Less;
+  depthStencilState.depthWriteEnabled = true;
+
+  depthStencilState.format = depthTextureFormat;
+  depthStencilState.stencilReadMask = 0;
+  depthStencilState.stencilWriteMask = 0;
+
+  pipelineDesc.depthStencil = &depthStencilState;
 
   // Samples per pixel
   pipelineDesc.multisample.count = 1;
@@ -521,15 +581,16 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   // Uniform structs have a size of maximum 16 float (more than what we need)
   requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4;
 
-  //// These two limits are different because they are "minimum" limits
-  //requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
-  //requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
+  // For the depth buffer, we enable textures (up to the size of the window):
+  requiredLimits.limits.maxTextureDimension1D = 480;
+  requiredLimits.limits.maxTextureDimension2D = 640;
+  requiredLimits.limits.maxTextureArrayLayers = 1;
 
   return requiredLimits;
 }
 
 void Application::InitializeBuffers() {
-  
+
   // Define data vectors, but without filling them in
   std::vector<float> pointData;
   std::vector<uint16_t> indexData;
