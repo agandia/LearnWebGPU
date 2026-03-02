@@ -6,10 +6,6 @@
 if (NOT EMSCRIPTEN)
     # Add the 'glfw' directory, which contains the definition of a 'glfw' target
     add_subdirectory(glfw)
-else()
-    # Create a mock 'glfw' target that just sets the `-sUSE_GLFW=3` link option:
-    add_library(glfw INTERFACE)
-    target_link_options(glfw INTERFACE -sUSE_GLFW=3)
 endif()
 # In both cases, we can now link to the 'glfw' target
 
@@ -22,10 +18,12 @@ add_subdirectory(webgpu)
 # Add source to this project's executable.
 add_executable (LearnWebGPU "Main.cpp" "webgpu-utils.h" "webgpu-utils.cpp")
 
+target_include_directories(LearnWebGPU PRIVATE .)
+
 # Add the "webgpu" target as a dependency of the executable
 target_link_libraries(LearnWebGPU PRIVATE webgpu glfw glfw3webgpu)
 
-# The appliucation's binary must find wgpu.dll or libwgpu.so at runtime,
+# The application's binary must find wgpu.dll or libwgpu.so at runtime,
 # so we copy it (called WPU_RUNTIME_LIB in general)
 # next to the binary
 target_copy_webgpu_binaries(LearnWebGPU)
@@ -59,7 +57,13 @@ if (EMSCRIPTEN)
   # Generate a full webpage rather than a simple WebAssembly module.
   set_target_properties(LearnWebGPU PROPERTIES SUFFIX ".html")
   # Enable the use of emscripten_sleep()
-	target_link_options(App PRIVATE -sASYNCIFY)
+	target_link_options(LearnWebGPU PRIVATE 
+    -sUSE_GLFW=3 # Use Emscripten-provided GLFW
+		-sUSE_WEBGPU # Handle WebGPU symbols
+		-sASYNCIFY # Required by WebGPU-C++
+		-sALLOW_MEMORY_GROWTH
+		#--preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+  )
 endif()
 
 # TODO: Add tests and install targets if needed.

@@ -151,8 +151,11 @@ bool Application::Initialize() {
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // No resizing at this step of the guide
   window = glfwCreateWindow(640, 480, "Learn WebGPU", nullptr, nullptr);
 
-  InstanceDescriptor instanceDesc = {};
-	Instance instance = createInstance(instanceDesc);
+#ifdef __EMSCRIPTEN__
+  Instance instance = createInstance();
+#else
+  Instance instance = createInstance(InstanceDescriptor{});
+#endif // __EMSCRIPTEN__
 
   // Check if the instance was created successfully
   if (!instance) {
@@ -222,8 +225,6 @@ bool Application::Initialize() {
   adapter.release();
 
   InitializePipeline();
-
-  PlayingWithBuffers();
 
   return true;
 }
