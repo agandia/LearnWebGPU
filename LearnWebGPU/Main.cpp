@@ -137,9 +137,12 @@ bool Application::Initialize() {
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // No resizing at this step of the guide
   window = glfwCreateWindow(640, 480, "Learn WebGPU", nullptr, nullptr);
 
+#ifdef __EMSCRIPTEN__
+  Instance instance = createInstance();
+#else
   InstanceDescriptor instanceDesc = {};
 	Instance instance = createInstance(instanceDesc);
-
+#endif
   // Check if the instance was created successfully
   if (!instance) {
     std::cerr << "Failed to create WebGPU instance. Could not initialize WebGPU" << std::endl;
@@ -172,8 +175,14 @@ bool Application::Initialize() {
     if (message) std::cout << " (" << message << ")";
     std::cout << std::endl;
     };
+  
+#ifdef __EMSCRIPTEN__
+  deviceDesc.requiredLimits = nullptr;
+#else
   RequiredLimits requiredLimits = GetRequiredLimits(adapter);
   deviceDesc.requiredLimits = &requiredLimits;  
+#endif
+
   device = adapter.requestDevice(deviceDesc);
   std::cout << "Got device: " << device << std::endl;
 
@@ -295,10 +304,10 @@ void Application::MainLoop() {
   CommandBuffer command = encoder.finish(cmdBufferDesc);
   encoder.release();
 
-  std::cout << "Submitting command..." << std::endl;
+  //std::cout << "Submitting command..." << std::endl;
   queue.submit(1, &command);
   command.release();
-  std::cout << "Command submitted." << std::endl;
+  //std::cout << "Command submitted." << std::endl;
 
   // At the end of the frame
   targetView.release();
@@ -373,18 +382,18 @@ void Application::InitializePipeline() {
   // For each attrib, describe its layout, aka how to interpret the data
   // Corresponds to the @location(0) in the vertex shader
   vertexAttribs[0].shaderLocation = 0; // @location(0)
-  vertexAttribs[0].format = VertexFormat::Float32x2;
+  vertexAttribs[0].format = VertexFormat::Float32x3;
   vertexAttribs[0].offset = 0;
 
   vertexAttribs[1].shaderLocation = 1; // @location(1)
   vertexAttribs[1].format = VertexFormat::Float32x3; // different type!
-  vertexAttribs[1].offset = 2 * sizeof(float); // non null offset!
+  vertexAttribs[1].offset = 3 * sizeof(float); // non null offset!
 
   vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
   vertexBufferLayout.attributes = vertexAttribs.data();
 
   // Common to attributes from the same buffer
-  vertexBufferLayout.arrayStride = 5 * sizeof(float); // Each vertex is a vec2f followed by a vec3f, so 5 floats
+  vertexBufferLayout.arrayStride = 6 * sizeof(float); // Each vertex is a vec2f or vec3f followed by a vec3f, so 5/6 floats
   vertexBufferLayout.stepMode = VertexStepMode::Vertex; // We move to the next vertex for each vertex shader invocation
 
   // We do not use any vertex buffer for this simple example.
@@ -500,7 +509,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   // Maximum size of a buffer is 6 vertices of 5 float each.
   requiredLimits.limits.maxBufferSize = 15 * 5 * sizeof(float);
   // Maximum stride between 2 consecutive vertices in the vertex buffer
-  requiredLimits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
+  requiredLimits.limits.maxVertexBufferArrayStride = 6 * sizeof(float);
 
   // There is a maximum of 3 float forwarded from vertex to fragment shader
   requiredLimits.limits.maxInterStageShaderComponents = 3;
@@ -526,7 +535,7 @@ void Application::InitializeBuffers() {
   std::vector<uint16_t> indexData;
 
   // Here we use the new 'loadGeometry' function:
-  bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/webgpu.txt", pointData, indexData);
+  bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/pyramid.txt", pointData, indexData, 3);
 
   // Check for errors
   if (!success) {

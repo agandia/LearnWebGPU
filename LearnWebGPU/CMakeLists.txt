@@ -79,7 +79,10 @@ if (EMSCRIPTEN)
   set_target_properties(LearnWebGPU PROPERTIES SUFFIX ".html")
   # Enable the use of emscripten_sleep()
 	target_link_options(LearnWebGPU PRIVATE
-		-sASYNCIFY
+		-sUSE_GLFW=3 # Use Emscripten-provided GLFW
+		-sUSE_WEBGPU # Handle WebGPU symbols
+		-sASYNCIFY # Required by WebGPU-C++
+		-sALLOW_MEMORY_GROWTH
 		--preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
 	)
 endif()

@@ -10,7 +10,8 @@ using namespace wgpu;
 bool ResourceManager::loadGeometry(
 	const std::filesystem::path& path,
 	std::vector<float>& pointData,
-	std::vector<uint16_t>& indexData
+	std::vector<uint16_t>& indexData,
+	int dimensions
 ) {
 	std::ifstream file(path);
 	if (!file.is_open()) {
@@ -49,8 +50,8 @@ bool ResourceManager::loadGeometry(
 		}
 		else if (currentSection == Section::Points) {
 			std::istringstream iss(line);
-			// Get x, y, r, g, b
-			for (int i = 0; i < 5; ++i) {
+			// Get x, y, z, r, g, b
+			for (int i = 0; i < dimensions + 3; ++i) {
 				iss >> value;
 				pointData.push_back(value);
 			}
@@ -68,26 +69,31 @@ bool ResourceManager::loadGeometry(
 }
 
 ShaderModule ResourceManager::loadShaderModule(const std::filesystem::path& path, Device device) {
-	std::ifstream file(path);
-	if (!file.is_open()) {
-		return nullptr;
-	}
-	file.seekg(0, std::ios::end);
-	size_t size = file.tellg();
-	std::string shaderSource(size, ' ');
-	file.seekg(0);
-	file.read(shaderSource.data(), size);
+    // Open the file in binary mode to preserve line endings exactly
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Could not load shader: " << path << std::endl;
+        return nullptr;
+    }
 
-	ShaderModuleWGSLDescriptor shaderCodeDesc{};
-	shaderCodeDesc.chain.next = nullptr;
-	shaderCodeDesc.chain.sType = SType::ShaderModuleWGSLDescriptor;
-	shaderCodeDesc.code = shaderSource.c_str();
+    // Read the entire file into a string without modifying line endings
+    std::string shaderSource((std::istreambuf_iterator<char>(file)),
+                              std::istreambuf_iterator<char>());
 
-	ShaderModuleDescriptor shaderDesc{};
+    // Guarantee null-termination for WGSL descriptor
+    shaderSource.push_back('\0');
+
+    ShaderModuleWGSLDescriptor shaderCodeDesc{};
+    shaderCodeDesc.chain.next = nullptr;
+    shaderCodeDesc.chain.sType = SType::ShaderModuleWGSLDescriptor;
+    shaderCodeDesc.code = shaderSource.c_str();
+
+    ShaderModuleDescriptor shaderDesc{};
 #ifdef WEBGPU_BACKEND_WGPU
-	shaderDesc.hintCount = 0;
-	shaderDesc.hints = nullptr;
+    shaderDesc.hintCount = 0;
+    shaderDesc.hints = nullptr;
 #endif
-	shaderDesc.nextInChain = &shaderCodeDesc.chain;
-	return device.createShaderModule(shaderDesc);
+    shaderDesc.nextInChain = &shaderCodeDesc.chain;
+
+    return device.createShaderModule(shaderDesc);
 }
