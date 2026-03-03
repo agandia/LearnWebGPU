@@ -87,6 +87,16 @@ private:
     float _pad[3];
   } uniforms;
 
+  /**
+ * A structure that describes the data layout in the vertex buffer
+ * We do not instantiate it but use it in `sizeof` and `offsetof`
+ */
+  struct VertexAttributes {
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec3 color;
+  };
+
   // Have the compiler check byte alignment
   static_assert(sizeof(MyUniforms) % 16 == 0);
 
@@ -458,23 +468,29 @@ void Application::InitializePipeline() {
   // We use one vertex buffer
   VertexBufferLayout vertexBufferLayout;
   // But we have now 2 different attributes
-  std::vector<VertexAttribute> vertexAttribs(2);
+  std::vector<VertexAttribute> vertexAttribs(3);
 
   // For each attrib, describe its layout, aka how to interpret the data
-  // Corresponds to the @location(0) in the vertex shader
-  vertexAttribs[0].shaderLocation = 0; // @location(0)
+  // Position attribute
+  vertexAttribs[0].shaderLocation = 0;
   vertexAttribs[0].format = VertexFormat::Float32x3;
-  vertexAttribs[0].offset = 0;
+  vertexAttribs[0].offset = offsetof(VertexAttributes, position);
 
-  vertexAttribs[1].shaderLocation = 1; // @location(1)
-  vertexAttribs[1].format = VertexFormat::Float32x3; // different type!
-  vertexAttribs[1].offset = 3 * sizeof(float); // non null offset!
+  // Normal attribute
+  vertexAttribs[1].shaderLocation = 1;
+  vertexAttribs[1].format = VertexFormat::Float32x3;
+  vertexAttribs[1].offset = offsetof(VertexAttributes, normal);
+
+  // Color attribute
+  vertexAttribs[2].shaderLocation = 2;
+  vertexAttribs[2].format = VertexFormat::Float32x3;
+  vertexAttribs[2].offset = offsetof(VertexAttributes, color);
 
   vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
   vertexBufferLayout.attributes = vertexAttribs.data();
 
   // Common to attributes from the same buffer
-  vertexBufferLayout.arrayStride = 6 * sizeof(float); // Each vertex is a vec2f or vec3f followed by a vec3f, so 5/6 floats
+  vertexBufferLayout.arrayStride = sizeof(VertexAttributes);
   vertexBufferLayout.stepMode = VertexStepMode::Vertex; // We move to the next vertex for each vertex shader invocation
 
   // We do not use any vertex buffer for this simple example.
@@ -591,17 +607,18 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   RequiredLimits requiredLimits = Default;
   requiredLimits.limits = supportedLimits.limits; // Start with the supported limits as a base, then override the ones we want to require
 
-  // We use at most 2 vertex attribute for now
-  requiredLimits.limits.maxVertexAttributes = 2;
+  // We use at most 3 vertex attribute for now
+  requiredLimits.limits.maxVertexAttributes = 3;
+
   // We should also tell that we use 1 vertex buffer
   requiredLimits.limits.maxVertexBuffers = 1;
   // Maximum size of a buffer is 6 vertices of 5 float each.
-  requiredLimits.limits.maxBufferSize = 15 * 5 * sizeof(float);
+  requiredLimits.limits.maxBufferSize = 16 * sizeof(VertexAttributes);
   // Maximum stride between 2 consecutive vertices in the vertex buffer
-  requiredLimits.limits.maxVertexBufferArrayStride = 6 * sizeof(float);
+  requiredLimits.limits.maxVertexBufferArrayStride = sizeof(VertexAttributes);
 
   // There is a maximum of 3 float forwarded from vertex to fragment shader
-  requiredLimits.limits.maxInterStageShaderComponents = 3;
+  requiredLimits.limits.maxInterStageShaderComponents = 6;
 
   // We use at most 1 bind group for now
   requiredLimits.limits.maxBindGroups = 1;
@@ -625,7 +642,7 @@ void Application::InitializeBuffers() {
   std::vector<uint16_t> indexData;
 
   // Here we use the new 'loadGeometry' function:
-  bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/pyramid.txt", pointData, indexData, 3);
+  bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/pyramid.txt", pointData, indexData, 6);
 
   // Check for errors
   if (!success) {
