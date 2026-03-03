@@ -38,18 +38,25 @@
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
 
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_LEFT_HANDED
+#include <glm/glm.hpp> // all types inspired from GLSL
+#include <glm/ext.hpp>
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif // __EMSCRIPTEN__
 
 #include <iostream>
 #include <cassert>
-#include <array>
+//#include <array>
 #include <vector>
 
 #include "ResourceManager.h"
 
 using namespace wgpu;
+
+constexpr float PI = 3.14159265358979323846f;
 
 class Application {
 public:
@@ -68,13 +75,18 @@ public:
 private:
 
   /**
-  * The same structure as in the shader, replicated in C++
-  */
+   * The same structure as in the shader, replicated in C++
+   */
   struct MyUniforms {
-    std::array<float, 4> color;  // or float color[4]
+    // We add transform matrices
+    glm::mat4 projectionMatrix;
+    glm::mat4 viewMatrix;
+    glm::mat4 modelMatrix;
+    glm::vec4 color;
     float time;
     float _pad[3];
-  };
+  } uniforms;
+
   // Have the compiler check byte alignment
   static_assert(sizeof(MyUniforms) % 16 == 0);
 
@@ -257,6 +269,14 @@ void Application::MainLoop() {
   float time = static_cast<float>(glfwGetTime());
   // Only update the 1-st float of the buffer
   queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, time), &time, sizeof(float));
+
+  //Update the model  Matrix
+  float angle1 = time;
+  glm::mat4 S = glm::scale(glm::mat4(1.0), glm::vec3(0.3f));
+  glm::mat4 T1 = glm::translate(glm::mat4(1.0), glm::vec3(0.5, 0.0, 0.0));
+  glm::mat4 R1 = glm::rotate(glm::mat4(1.0f), angle1, glm::vec3(0.0f, 0.0f, 1.0f));
+  uniforms.modelMatrix = R1 * T1 * S;
+  queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
 
   // Get the next target texture/surface view
   TextureView targetView = GetNextSurfaceTextureView();
@@ -588,7 +608,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   // We use at most 1 uniform buffer per stage
   requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
   // Uniform structs have a size of maximum 16 float (more than what we need)
-  requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4;
+  requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4 * sizeof(float);
 
   // For the depth buffer, we enable textures (up to the size of the window):
   requiredLimits.limits.maxTextureDimension1D = 480;
@@ -645,9 +665,11 @@ void Application::InitializeBuffers() {
   uniformBuffer = device.createBuffer(bufferDesc);
 
   // Upload the initial value of the uniforms
-  MyUniforms uniforms;
   uniforms.time = 1.0f;
   uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
+  uniforms.modelMatrix = glm::mat4(1.0f);
+  uniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  uniforms.projectionMatrix = glm::perspective(glm::radians(45.0f), 640.0f / 480.0f, 0.1f, 100.0f);
   queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 }
 

@@ -18,9 +18,10 @@ add_subdirectory(webgpu)
 # Add a little extension of glfw that connects it to WebGPU
 add_subdirectory(glfw3webgpu)
 
-
 # Add source to this project's executable.
 add_executable (LearnWebGPU "Main.cpp" "ResourceManager.h" "ResourceManager.cpp")
+
+target_include_directories(LearnWebGPU PRIVATE .)
 
 # Add the "webgpu" target as a dependency of the executable
 target_link_libraries(LearnWebGPU PRIVATE webgpu glfw glfw3webgpu)
@@ -61,6 +62,8 @@ endif()
 
 # Set compiler warnings to be treated as errors and enable extra warnings.
 if(MSVC)
+# Disable warning C4201: nonstandard extension used: nameless struct/union
+	target_compile_options(LearnWebGPU PUBLIC /wd4201)
   target_compile_options(LearnWebGPU PRIVATE /W4)
 else()
   target_compile_options(LearnWebGPU PRIVATE -Wall -Wextra -pedantic)
@@ -84,6 +87,7 @@ if (EMSCRIPTEN)
 		-sASYNCIFY # Required by WebGPU-C++
 		-sALLOW_MEMORY_GROWTH
 		--preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+    --shell-file "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
 	)
 endif()
 
