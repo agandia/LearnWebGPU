@@ -79,7 +79,7 @@ private:
   static_assert(sizeof(MyUniforms) % 16 == 0);
 
   TextureView GetNextSurfaceTextureView();
-  TextureView GetDepthTextureView();
+  void GetDepthTextureResources();
 
   void InitializePipeline();
   RequiredLimits GetRequiredLimits(Adapter adapter) const;
@@ -93,6 +93,8 @@ private:
   Surface surface;
   TextureFormat surfaceFormat = TextureFormat::Undefined;
   TextureFormat depthTextureFormat = TextureFormat::Depth24Plus;
+  Texture depthTexture;
+  TextureView depthTextureView;
   RenderPipeline pipeline;
   Buffer pointBuffer;
   Buffer indexBuffer;
@@ -216,6 +218,8 @@ bool Application::Initialize() {
 
   surface.configure(config);
 
+  GetDepthTextureResources();
+
   // And equally good practice to release the adapter after it has been fully utilized
   adapter.release();
 
@@ -239,6 +243,8 @@ void Application::Terminate() {
   surface.unconfigure();
   queue.release();
   surface.release();
+  depthTextureView.release();
+  depthTexture.release();
   device.release();
   glfwDestroyWindow(window);
   glfwTerminate();
@@ -278,7 +284,6 @@ void Application::MainLoop() {
   // We now add a depth/stencil attachment:
   RenderPassDepthStencilAttachment depthStencilAttachment = {};
   // Setup depth/stencil attachment
-  TextureView depthTextureView = GetDepthTextureView();
   // The view of the depth texture
   depthStencilAttachment.view = depthTextureView;
 
@@ -292,8 +297,14 @@ void Application::MainLoop() {
 
   // Stencil setup, mandatory but unused
   depthStencilAttachment.stencilClearValue = 0;
+#ifdef WEBGPU_BACKEND_WGPU
   depthStencilAttachment.stencilLoadOp = LoadOp::Clear;
   depthStencilAttachment.stencilStoreOp = StoreOp::Store;
+#else
+  depthStencilAttachment.stencilLoadOp = LoadOp::Undefined;
+  depthStencilAttachment.stencilStoreOp = StoreOp::Undefined;
+  
+#endif
   depthStencilAttachment.stencilReadOnly = true;
 
 
@@ -335,7 +346,7 @@ void Application::MainLoop() {
 
   // At the end of the frame
   targetView.release();
-  depthTextureView.release();
+
 #ifndef __EMSCRIPTEN__
   surface.present();
 #endif
@@ -383,7 +394,7 @@ TextureView Application::GetNextSurfaceTextureView() {
   return targetView;
 }
 
-TextureView Application::GetDepthTextureView() {
+void Application::GetDepthTextureResources() {
   // Create the depth texture
   TextureDescriptor depthTextureDesc;
   depthTextureDesc.dimension = TextureDimension::_2D;
@@ -394,7 +405,7 @@ TextureView Application::GetDepthTextureView() {
   depthTextureDesc.usage = TextureUsage::RenderAttachment;
   depthTextureDesc.viewFormatCount = 1;
   depthTextureDesc.viewFormats = (WGPUTextureFormat*)&depthTextureFormat;
-  Texture depthTexture = device.createTexture(depthTextureDesc);
+  depthTexture = device.createTexture(depthTextureDesc);
 
   // Create the view of the depth texture manipulated by the rasterizer
   TextureViewDescriptor depthTextureViewDesc;
@@ -405,9 +416,7 @@ TextureView Application::GetDepthTextureView() {
   depthTextureViewDesc.mipLevelCount = 1;
   depthTextureViewDesc.dimension = TextureViewDimension::_2D;
   depthTextureViewDesc.format = depthTextureFormat;
-  TextureView depthTextureView = depthTexture.createView(depthTextureViewDesc);
-
-  return depthTextureView;
+  depthTextureView = depthTexture.createView(depthTextureViewDesc);
 }
 
 void Application::InitializePipeline() {
