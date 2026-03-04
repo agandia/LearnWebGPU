@@ -102,19 +102,19 @@ static void writeMipMaps(Device device, Texture m_texture, Extent3D textureSize,
 	Queue queue = device.getQueue();
 
 	// Arguments telling which part of the texture we upload to
-	ImageCopyTexture destination;
+	ImageCopyTexture destination{};
 	destination.texture = m_texture;
 	destination.origin = { 0, 0, 0 };
 	destination.aspect = TextureAspect::All;
 
 	// Arguments telling how the C++ side pixel memory is laid out
-	TextureDataLayout source;
+	TextureDataLayout source{};
 	source.offset = 0;
 
 	// Create image data
 	Extent3D mipLevelSize = textureSize;
 	std::vector<unsigned char> previousLevelPixels;
-	Extent3D previousMipLevelSize;
+	Extent3D previousMipLevelSize{};
 	for (uint32_t level = 0; level < mipLevelCount; ++level) {
 		// Pixel data for the current level
 		std::vector<unsigned char> pixels(4 * mipLevelSize.width * mipLevelSize.height);
@@ -163,10 +163,13 @@ Texture ResourceManager::loadTexture(const std::filesystem::path& path, Device d
 	unsigned char* pixelData = stbi_load(path.string().c_str(), &width, &height, &channels, 4 /* force 4 channels */);
 	
 	// If data is null, loading failed.
-	//if (nullptr == pixelData) return nullptr;
+	if (!pixelData) {
+		std::cerr << "Failed to load texture: " << path << std::endl;
+		return nullptr;
+	}
 
 	// Use the width, height, channels and data variables here
-	TextureDescriptor textureDesc;
+	TextureDescriptor textureDesc{};
 	textureDesc.dimension = TextureDimension::_2D;
 	textureDesc.format = TextureFormat::RGBA8Unorm; // by convention for bmp, png and jpg file. Be careful with other formats.
 	textureDesc.size = { (unsigned int)width, (unsigned int)height, 1 };
@@ -184,7 +187,7 @@ Texture ResourceManager::loadTexture(const std::filesystem::path& path, Device d
 	// (Do not use data after this)
 
 	if (pTextureView) {
-		TextureViewDescriptor textureViewDesc;
+		TextureViewDescriptor textureViewDesc{};
 		textureViewDesc.aspect = TextureAspect::All;
 		textureViewDesc.baseArrayLayer = 0;
 		textureViewDesc.arrayLayerCount = 1;

@@ -249,7 +249,7 @@ void Application::terminateWindowAndDevice()
 	glfwTerminate();
 }
 
-RequiredLimits Application::getRequiredLimits(Adapter adapter) const
+RequiredLimits Application::getRequiredLimits(Adapter adapter)
 {
 	// Get adapter supported limits, in case we need them
 	SupportedLimits supportedLimits;
@@ -514,7 +514,7 @@ void Application::terminateTexture()
 	mSampler.release();
 }
 
-TextureView Application::getNextSurfaceTextureView() const
+TextureView Application::getNextSurfaceTextureView()
 {
 	// Get the surface Texture
 	SurfaceTexture surfaceTexture{};

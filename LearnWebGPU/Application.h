@@ -24,7 +24,7 @@ private:
 	bool initWindowAndDevice();
 	void terminateWindowAndDevice();
 
-  wgpu::RequiredLimits getRequiredLimits(wgpu::Adapter adapter) const;
+  wgpu::RequiredLimits getRequiredLimits(wgpu::Adapter adapter);
 
 	void configSurface();
 	void terminateSurfaceConfig();
@@ -38,7 +38,7 @@ private:
 	bool initTexture();
 	void terminateTexture();
 
-	wgpu::TextureView getNextSurfaceTextureView() const;
+	wgpu::TextureView getNextSurfaceTextureView();
 
 	bool initGeometry();
 	void terminateGeometry();
