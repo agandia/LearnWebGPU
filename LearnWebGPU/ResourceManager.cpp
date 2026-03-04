@@ -162,13 +162,7 @@ bool ResourceManager::loadGeometryFromObj(const std::filesystem::path& path, std
 }
 
 // Auxiliary function for loadTexture
-static void writeMipMaps(
-	Device m_device,
-	Texture m_texture,
-	Extent3D textureSize,
-	uint32_t mipLevelCount,
-	const unsigned char* pixelData)
-{
+static void writeMipMaps(Device m_device, Texture m_texture, Extent3D textureSize, uint32_t mipLevelCount, const unsigned char* pixelData) {
 	Queue m_queue = m_device.getQueue();
 
 	// Arguments telling which part of the texture we upload to
@@ -253,10 +247,9 @@ Texture ResourceManager::loadTexture(const int width, const int height, Device m
 	for (uint32_t i = 0; i < textureDesc.size.width; ++i) {
 		for (uint32_t j = 0; j < textureDesc.size.height; ++j) {
 			uint8_t* p = &pixels[4 * (j * textureDesc.size.width + i)];
-			p[0] = (uint8_t)i; // r
-			p[1] = (uint8_t)j; // g
-			p[2] = 128; // b
-			p[3] = 255; // a
+			p[0] = (i / 16) % 2 == (j / 16) % 2 ? 255 : 0; // r
+			p[1] = ((i - j) / 16) % 2 == 0 ? 255 : 0; // g
+			p[2] = ((i + j) / 16) % 2 == 0 ? 255 : 0; // b
 		}
 	}
 

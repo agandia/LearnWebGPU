@@ -95,6 +95,7 @@ private:
   void InitializePipeline();
   RequiredLimits GetRequiredLimits(Adapter adapter) const;
   bool InitializeBuffers();
+  void InitializeSampler();
   void InitializeBindGroups();
 
   void GetTextureResources();
@@ -110,6 +111,7 @@ private:
   TextureView depthTextureView;
   Texture texture;
   TextureView textureView;
+  Sampler sampler;
   RenderPipeline pipeline;
   Buffer vertexBuffer;
   Buffer uniformBuffer;
@@ -241,6 +243,8 @@ bool Application::Initialize() {
 
   if (!InitializeBuffers()) { return false; }
 
+  InitializeSampler();
+
   InitializeBindGroups();
 
   return true;
@@ -274,15 +278,19 @@ void Application::MainLoop() {
   queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, time), &time, sizeof(float));
 
   //Update the model  Matrix
-  float angle1 = time;
-  glm::mat4 M(1.0f);  
-  M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
-  M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
-  M = glm::scale(M, glm::vec3(0.3f));
-  uniforms.modelMatrix = M;
-
-  queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
+  //float angle1 = time;
+  //glm::mat4 M(1.0f);  
+  //M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
+  //M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
+  //M = glm::scale(M, glm::vec3(0.3f));
+  //uniforms.modelMatrix = M;
+  //
+  //queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
   
+  float viewZ = glm::mix(0.0f, 0.25f, glm::cos(2 * glm::pi<float>() * time / 4.0f) * 0.5f + 0.5f);
+  uniforms.viewMatrix = glm::lookAt(glm::vec3(-0.5f, -1.5f, viewZ + 0.25f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, viewMatrix), &uniforms.viewMatrix, sizeof(MyUniforms::viewMatrix));
+
   // Get the next target texture/surface view
   TextureView targetView = GetNextSurfaceTextureView();
   if (!targetView) {
@@ -576,7 +584,7 @@ void Application::InitializePipeline() {
   pipelineDesc.multisample.alphaToCoverageEnabled = false;
 
   // Create a binding group
-  std::vector<BindGroupLayoutEntry> bindingLayoutEntries(2, Default);
+  std::vector<BindGroupLayoutEntry> bindingLayoutEntries(3, Default);
 
   BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
   bindingLayout.binding = 0;
@@ -590,6 +598,12 @@ void Application::InitializePipeline() {
   textureBindingLayout.visibility = ShaderStage::Fragment;
   textureBindingLayout.texture.sampleType = TextureSampleType::Float;
   textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
+  // The texture sampler binding
+  BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[2];
+  samplerBindingLayout.binding = 2;
+  samplerBindingLayout.visibility = ShaderStage::Fragment;
+  samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
 
   // A bind group contains one or multiple bindings
   BindGroupLayoutDescriptor bindGroupLayoutDesc{};
@@ -628,18 +642,14 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   requiredLimits.limits.maxBufferSize = 1500000 * sizeof(VertexAttributes);
   requiredLimits.limits.maxVertexBufferArrayStride = sizeof(VertexAttributes);
   requiredLimits.limits.maxInterStageShaderComponents = 8;
-
-  // We use at most 1 bind group for now
   requiredLimits.limits.maxBindGroups = 1;
-  // We use at most 1 uniform buffer per stage
   requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
-  // Uniform structs have a size of maximum 16 float (more than what we need)
   requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4 * sizeof(float);
-
-  // For the depth buffer, we enable textures (up to the size of the window):
   requiredLimits.limits.maxTextureDimension1D = 480;
   requiredLimits.limits.maxTextureDimension2D = 640;
   requiredLimits.limits.maxTextureArrayLayers = 1;
+  requiredLimits.limits.maxSampledTexturesPerShaderStage = 1;
+  requiredLimits.limits.maxSamplersPerShaderStage = 1;
 
   return requiredLimits;
 }
@@ -654,7 +664,7 @@ bool Application::InitializeBuffers() {
 
   // Load mesh data from OBJ file
   std::vector<VertexAttributes> vertexData;
-  bool success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/cube.obj", vertexData);
+  bool success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/plane.obj", vertexData);
   if (!success) {
     std::cerr << "Could not load geometry!" << std::endl;
     return false;
@@ -691,9 +701,26 @@ bool Application::InitializeBuffers() {
   return true;
 }
 
+void Application::InitializeSampler()
+{
+  // Create a sampler
+  SamplerDescriptor samplerDesc;
+  samplerDesc.addressModeU = AddressMode::Repeat;
+  samplerDesc.addressModeV = AddressMode::Repeat;
+  samplerDesc.addressModeW = AddressMode::ClampToEdge;
+  samplerDesc.magFilter = FilterMode::Linear;
+  samplerDesc.minFilter = FilterMode::Linear;
+  samplerDesc.mipmapFilter = MipmapFilterMode::Linear;
+  samplerDesc.lodMinClamp = 0.0f;
+  samplerDesc.lodMaxClamp = 8.0f;
+  samplerDesc.compare = CompareFunction::Undefined;
+  samplerDesc.maxAnisotropy = 1;
+  sampler = device.createSampler(samplerDesc);
+}
+
 void Application::InitializeBindGroups() {
   // Create a binding
-  std::vector<BindGroupEntry> bindings(2);
+  std::vector<BindGroupEntry> bindings(3);
   bindings[0].binding = 0;
   bindings[0].buffer = uniformBuffer;
   bindings[0].offset = 0;
@@ -701,6 +728,9 @@ void Application::InitializeBindGroups() {
 
   bindings[1].binding = 1;
   bindings[1].textureView = textureView;
+
+  bindings[2].binding = 2;
+  bindings[2].sampler = sampler;
 
   BindGroupDescriptor bindGroupDesc;
   bindGroupDesc.layout = bindGroupLayout;
