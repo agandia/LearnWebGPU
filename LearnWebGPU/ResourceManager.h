@@ -11,7 +11,6 @@ public:
 
 	/**
 	* A structure that describes the data layout in the vertex buffer
-	* We do not instantiate it but use it in `sizeof` and `offsetof`
 	*/
 	struct VertexAttributes {
 		glm::vec3 position;
@@ -20,23 +19,13 @@ public:
     glm::vec2 uv;
 	};
 
-	/**
-	 * Load a file from `path` using our ad-hoc format and populate the `pointData`
-	 * and `indexData` vectors.
-	 */
-	static bool loadGeometry(const std::filesystem::path& path, std::vector<float>& pointData, std::vector<uint16_t>& indexData, int dimensions = 2);
-
-	/**
-	 * Create a shader module for a given WebGPU `device` from a WGSL shader source
-	 * loaded from file `path`.
-	 */
+	
+	// Create a shader module for a given WebGPU `device` from a WGSL shader source loaded from a path
 	static wgpu::ShaderModule loadShaderModule(const std::filesystem::path& path, wgpu::Device device);
 	
 	// Load an 3D mesh from a standard .obj file into a vertex data buffer
 	static bool loadGeometryFromObj(const std::filesystem::path& path, std::vector<VertexAttributes>& vertexData);
 
 	// Load an image from a standard image file into a new texture object
-	// NB: The texture must be destroyed after use
-	//static wgpu::Texture loadTexture(const std::filesystem::path& path, wgpu::Device m_device, wgpu::TextureView* pTextureView = nullptr);
-	static wgpu::Texture loadTexture(const int width, const int height, wgpu::Device m_device, wgpu::TextureView* pTextureView = nullptr);
+	static wgpu::Texture loadTexture(const std::filesystem::path& path, wgpu::Device m_device, wgpu::TextureView* pTextureView = nullptr);
 };

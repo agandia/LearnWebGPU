@@ -1,75 +1,12 @@
-// In ResourceManager.cpp
 #include "ResourceManager.h"
 
 #include <fstream>
-#include <sstream>
 #include <string>
 
-#define TINYOBJLOADER_IMPLEMENTATION // add this to exactly 1 of your C++ files
 #include "tiny_obj_loader.h"
+#include "stb_image.h"
 
 using namespace wgpu;
-
-bool ResourceManager::loadGeometry(
-	const std::filesystem::path& path,
-	std::vector<float>& pointData,
-	std::vector<uint16_t>& indexData,
-	int dimensions
-) {
-	std::ifstream file(path);
-	if (!file.is_open()) {
-		return false;
-	}
-
-	pointData.clear();
-	indexData.clear();
-
-	enum class Section {
-		None,
-		Points,
-		Indices,
-	};
-	Section currentSection = Section::None;
-
-	float value;
-	uint16_t index;
-	std::string line;
-	while (!file.eof()) {
-		getline(file, line);
-
-		// overcome the `CRLF` problem
-		if (!line.empty() && line.back() == '\r') {
-			line.pop_back();
-		}
-
-		if (line == "[points]") {
-			currentSection = Section::Points;
-		}
-		else if (line == "[indices]") {
-			currentSection = Section::Indices;
-		}
-		else if (line[0] == '#' || line.empty()) {
-			// Do nothing, this is a comment
-		}
-		else if (currentSection == Section::Points) {
-			std::istringstream iss(line);
-			// Get x, y, z, r, g, b
-			for (int i = 0; i < dimensions + 3; ++i) {
-				iss >> value;
-				pointData.push_back(value);
-			}
-		}
-		else if (currentSection == Section::Indices) {
-			std::istringstream iss(line);
-			// Get corners #0 #1 and #2
-			for (int i = 0; i < 3; ++i) {
-				iss >> index;
-				indexData.push_back(index);
-			}
-		}
-	}
-	return true;
-}
 
 ShaderModule ResourceManager::loadShaderModule(const std::filesystem::path& path, Device device) {
     // Open the file in binary mode to preserve line endings exactly
@@ -101,8 +38,7 @@ ShaderModule ResourceManager::loadShaderModule(const std::filesystem::path& path
     return device.createShaderModule(shaderDesc);
 }
 
-bool ResourceManager::loadGeometryFromObj(const std::filesystem::path& path, std::vector<VertexAttributes>& vertexData)
-{
+bool ResourceManager::loadGeometryFromObj(const std::filesystem::path& path, std::vector<VertexAttributes>& vertexData) {
 	tinyobj::attrib_t attrib;
 	std::vector<tinyobj::shape_t> shapes;
 	std::vector<tinyobj::material_t> materials;
@@ -162,8 +98,8 @@ bool ResourceManager::loadGeometryFromObj(const std::filesystem::path& path, std
 }
 
 // Auxiliary function for loadTexture
-static void writeMipMaps(Device m_device, Texture m_texture, Extent3D textureSize, uint32_t mipLevelCount, const unsigned char* pixelData) {
-	Queue m_queue = m_device.getQueue();
+static void writeMipMaps(Device device, Texture m_texture, Extent3D textureSize, uint32_t mipLevelCount, const unsigned char* pixelData) {
+	Queue queue = device.getQueue();
 
 	// Arguments telling which part of the texture we upload to
 	ImageCopyTexture destination;
@@ -210,7 +146,7 @@ static void writeMipMaps(Device m_device, Texture m_texture, Extent3D textureSiz
 		destination.mipLevel = level;
 		source.bytesPerRow = 4 * mipLevelSize.width;
 		source.rowsPerImage = mipLevelSize.height;
-		m_queue.writeTexture(destination, pixels.data(), pixels.size(), source, mipLevelSize);
+		queue.writeTexture(destination, pixels.data(), pixels.size(), source, mipLevelSize);
 
 		previousLevelPixels = std::move(pixels);
 		previousMipLevelSize = mipLevelSize;
@@ -218,14 +154,13 @@ static void writeMipMaps(Device m_device, Texture m_texture, Extent3D textureSiz
 		mipLevelSize.height /= 2;
 	}
 
-	m_queue.release();
+	queue.release();
 }
 
 
-//Texture ResourceManager::loadTexture(const std::filesystem::path& path, Device m_device, TextureView* pTextureView) {
-Texture ResourceManager::loadTexture(const int width, const int height, Device m_device, TextureView* pTextureView) {
-	//int width, height, channels;
-	//unsigned char* pixelData = stbi_load(path.string().c_str(), &width, &height, &channels, 4 /* force 4 channels */);
+Texture ResourceManager::loadTexture(const std::filesystem::path& path, Device device, TextureView* pTextureView) {
+	int width, height, channels;
+	unsigned char* pixelData = stbi_load(path.string().c_str(), &width, &height, &channels, 4 /* force 4 channels */);
 	
 	// If data is null, loading failed.
 	//if (nullptr == pixelData) return nullptr;
@@ -240,23 +175,12 @@ Texture ResourceManager::loadTexture(const int width, const int height, Device m
 	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
 	textureDesc.viewFormatCount = 0;
 	textureDesc.viewFormats = nullptr;
-	Texture m_texture = m_device.createTexture(textureDesc);
-
-	// Create image data manually
-	std::vector<unsigned char> pixels(4 * textureDesc.size.width * textureDesc.size.height);
-	for (uint32_t i = 0; i < textureDesc.size.width; ++i) {
-		for (uint32_t j = 0; j < textureDesc.size.height; ++j) {
-			uint8_t* p = &pixels[4 * (j * textureDesc.size.width + i)];
-			p[0] = (i / 16) % 2 == (j / 16) % 2 ? 255 : 0; // r
-			p[1] = ((i - j) / 16) % 2 == 0 ? 255 : 0; // g
-			p[2] = ((i + j) / 16) % 2 == 0 ? 255 : 0; // b
-		}
-	}
+	Texture m_texture = device.createTexture(textureDesc);
 
 	// Upload data to the GPU texture
-	writeMipMaps(m_device, m_texture, textureDesc.size, textureDesc.mipLevelCount, pixels.data());
+	writeMipMaps(device, m_texture, textureDesc.size, textureDesc.mipLevelCount, pixelData);
 
-	//stbi_image_free(pixelData);
+	stbi_image_free(pixelData);
 	// (Do not use data after this)
 
 	if (pTextureView) {

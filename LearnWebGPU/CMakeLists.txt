@@ -19,7 +19,7 @@ add_subdirectory(webgpu)
 add_subdirectory(glfw3webgpu)
 
 # Add source to this project's executable.
-add_executable (LearnWebGPU "Main.cpp" "ResourceManager.h" "ResourceManager.cpp" "tiny_obj_loader.h")
+add_executable (LearnWebGPU "Main.cpp" "ResourceManager.h" "ResourceManager.cpp" "tiny_obj_loader.h" "stb_image.h" "Application.h" "Application.cpp" "implementations.cpp")
 
 target_include_directories(LearnWebGPU PRIVATE .)
 
@@ -62,8 +62,15 @@ endif()
 
 # Set compiler warnings to be treated as errors and enable extra warnings.
 if(MSVC)
+# Ignore a warning that GLM requires to bypass
 # Disable warning C4201: nonstandard extension used: nameless struct/union
 	target_compile_options(LearnWebGPU PUBLIC /wd4201)
+# Disable warning C4305: truncation from 'int' to 'bool' in 'if' condition
+	target_compile_options(LearnWebGPU PUBLIC /wd4305)
+
+# Ignore a warning that stb_image requires to bypass
+# Disable warning C4244: conversion from 'int' to 'short', possible loss of data
+	target_compile_options(LearnWebGPU PUBLIC /wd4244)
   target_compile_options(LearnWebGPU PRIVATE /W4)
 else()
   target_compile_options(LearnWebGPU PRIVATE -Wall -Wextra -pedantic)
