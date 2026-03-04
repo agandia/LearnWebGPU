@@ -31,6 +31,7 @@ struct MyUniforms {
 };
 
 @group(0) @binding(0) var<uniform> uMyUniforms: MyUniforms; // A uniform struct variable that we can set from the CPU
+@group(0) @binding(1) var gradientTexture: texture_2d<f32>;
 
 const pi = 3.14159265359;
 
@@ -55,7 +56,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	let shading1 = max(0.0, dot(lightDirection1, normal));
 	let shading2 = max(0.0, dot(lightDirection2, normal));
 	let shading = shading1 * lightColor1 + shading2 * lightColor2;
-	let color = in.color * shading;
+	//let color = in.color * shading;
+	let color = textureLoad(gradientTexture, vec2<i32>(in.position.xy), 0).rgb;
 
 	// Gamma-correction
 	let linear_color = pow(color, vec3f(2.2));

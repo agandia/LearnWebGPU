@@ -156,3 +156,123 @@ bool ResourceManager::loadGeometryFromObj(const std::filesystem::path& path, std
 	return true;
 }
 
+// Auxiliary function for loadTexture
+static void writeMipMaps(
+	Device m_device,
+	Texture m_texture,
+	Extent3D textureSize,
+	uint32_t mipLevelCount,
+	const unsigned char* pixelData)
+{
+	Queue m_queue = m_device.getQueue();
+
+	// Arguments telling which part of the texture we upload to
+	ImageCopyTexture destination;
+	destination.texture = m_texture;
+	destination.origin = { 0, 0, 0 };
+	destination.aspect = TextureAspect::All;
+
+	// Arguments telling how the C++ side pixel memory is laid out
+	TextureDataLayout source;
+	source.offset = 0;
+
+	// Create image data
+	Extent3D mipLevelSize = textureSize;
+	std::vector<unsigned char> previousLevelPixels;
+	Extent3D previousMipLevelSize;
+	for (uint32_t level = 0; level < mipLevelCount; ++level) {
+		// Pixel data for the current level
+		std::vector<unsigned char> pixels(4 * mipLevelSize.width * mipLevelSize.height);
+		if (level == 0) {
+			// We cannot really avoid this copy since we need this
+			// in previousLevelPixels at the next iteration
+			memcpy(pixels.data(), pixelData, pixels.size());
+		}
+		else {
+			// Create mip level data
+			for (uint32_t i = 0; i < mipLevelSize.width; ++i) {
+				for (uint32_t j = 0; j < mipLevelSize.height; ++j) {
+					unsigned char* p = &pixels[4 * (j * mipLevelSize.width + i)];
+					// Get the corresponding 4 pixels from the previous level
+					unsigned char* p00 = &previousLevelPixels[4 * ((2 * j + 0) * previousMipLevelSize.width + (2 * i + 0))];
+					unsigned char* p01 = &previousLevelPixels[4 * ((2 * j + 0) * previousMipLevelSize.width + (2 * i + 1))];
+					unsigned char* p10 = &previousLevelPixels[4 * ((2 * j + 1) * previousMipLevelSize.width + (2 * i + 0))];
+					unsigned char* p11 = &previousLevelPixels[4 * ((2 * j + 1) * previousMipLevelSize.width + (2 * i + 1))];
+					// Average
+					p[0] = (p00[0] + p01[0] + p10[0] + p11[0]) / 4;
+					p[1] = (p00[1] + p01[1] + p10[1] + p11[1]) / 4;
+					p[2] = (p00[2] + p01[2] + p10[2] + p11[2]) / 4;
+					p[3] = (p00[3] + p01[3] + p10[3] + p11[3]) / 4;
+				}
+			}
+		}
+
+		// Upload data to the GPU texture
+		destination.mipLevel = level;
+		source.bytesPerRow = 4 * mipLevelSize.width;
+		source.rowsPerImage = mipLevelSize.height;
+		m_queue.writeTexture(destination, pixels.data(), pixels.size(), source, mipLevelSize);
+
+		previousLevelPixels = std::move(pixels);
+		previousMipLevelSize = mipLevelSize;
+		mipLevelSize.width /= 2;
+		mipLevelSize.height /= 2;
+	}
+
+	m_queue.release();
+}
+
+
+//Texture ResourceManager::loadTexture(const std::filesystem::path& path, Device m_device, TextureView* pTextureView) {
+Texture ResourceManager::loadTexture(const int width, const int height, Device m_device, TextureView* pTextureView) {
+	//int width, height, channels;
+	//unsigned char* pixelData = stbi_load(path.string().c_str(), &width, &height, &channels, 4 /* force 4 channels */);
+	
+	// If data is null, loading failed.
+	//if (nullptr == pixelData) return nullptr;
+
+	// Use the width, height, channels and data variables here
+	TextureDescriptor textureDesc;
+	textureDesc.dimension = TextureDimension::_2D;
+	textureDesc.format = TextureFormat::RGBA8Unorm; // by convention for bmp, png and jpg file. Be careful with other formats.
+	textureDesc.size = { (unsigned int)width, (unsigned int)height, 1 };
+	textureDesc.mipLevelCount = std::bit_width(std::max(textureDesc.size.width, textureDesc.size.height));
+	textureDesc.sampleCount = 1;
+	textureDesc.usage = TextureUsage::TextureBinding | TextureUsage::CopyDst;
+	textureDesc.viewFormatCount = 0;
+	textureDesc.viewFormats = nullptr;
+	Texture m_texture = m_device.createTexture(textureDesc);
+
+	// Create image data manually
+	std::vector<unsigned char> pixels(4 * textureDesc.size.width * textureDesc.size.height);
+	for (uint32_t i = 0; i < textureDesc.size.width; ++i) {
+		for (uint32_t j = 0; j < textureDesc.size.height; ++j) {
+			uint8_t* p = &pixels[4 * (j * textureDesc.size.width + i)];
+			p[0] = (uint8_t)i; // r
+			p[1] = (uint8_t)j; // g
+			p[2] = 128; // b
+			p[3] = 255; // a
+		}
+	}
+
+	// Upload data to the GPU texture
+	writeMipMaps(m_device, m_texture, textureDesc.size, textureDesc.mipLevelCount, pixels.data());
+
+	//stbi_image_free(pixelData);
+	// (Do not use data after this)
+
+	if (pTextureView) {
+		TextureViewDescriptor textureViewDesc;
+		textureViewDesc.aspect = TextureAspect::All;
+		textureViewDesc.baseArrayLayer = 0;
+		textureViewDesc.arrayLayerCount = 1;
+		textureViewDesc.baseMipLevel = 0;
+		textureViewDesc.mipLevelCount = textureDesc.mipLevelCount;
+		textureViewDesc.dimension = TextureViewDimension::_2D;
+		textureViewDesc.format = textureDesc.format;
+		*pTextureView = m_texture.createView(textureViewDesc);
+	}
+
+	return m_texture;
+}
+

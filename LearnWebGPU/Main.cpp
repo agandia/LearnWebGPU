@@ -97,6 +97,8 @@ private:
   bool InitializeBuffers();
   void InitializeBindGroups();
 
+  void GetTextureResources();
+
   // Shared data between init and main loop.
   GLFWwindow* window;
   Device device;
@@ -106,6 +108,8 @@ private:
   TextureFormat depthTextureFormat = TextureFormat::Depth24Plus;
   Texture depthTexture;
   TextureView depthTextureView;
+  Texture texture;
+  TextureView textureView;
   RenderPipeline pipeline;
   Buffer vertexBuffer;
   Buffer uniformBuffer;
@@ -252,6 +256,8 @@ void Application::Terminate() {
   surface.unconfigure();
   queue.release();
   surface.release();
+  textureView.release();
+  texture.release();
   depthTextureView.release();
   depthTexture.release();
   device.release();
@@ -268,18 +274,21 @@ void Application::MainLoop() {
   queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, time), &time, sizeof(float));
 
   //Update the model  Matrix
-  float angle1 = time;
-  glm::mat4 M(1.0f);  
-  M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
-  M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
-  M = glm::scale(M, glm::vec3(0.3f));
-  uniforms.modelMatrix = M;
+  //float angle1 = time;
+  //glm::mat4 M(1.0f);  
+  //M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
+  //M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
+  //M = glm::scale(M, glm::vec3(0.3f));
+  //uniforms.modelMatrix = M;
 
-  queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
-
+  //queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
+  
   // Get the next target texture/surface view
   TextureView targetView = GetNextSurfaceTextureView();
-  if (!targetView) return;
+  if (!targetView) {
+    std::cerr << "Cannot acquire next swap chain texture" << std::endl;
+    return;
+  }
 
   // Create the command encoder for the draw call
   CommandEncoderDescriptor encoderDesc = {};
@@ -411,6 +420,13 @@ TextureView Application::GetNextSurfaceTextureView() {
 }
 
 void Application::GetDepthTextureResources() {
+  // Destroy previously allocated texture
+  if (depthTexture != nullptr) {
+    depthTextureView.release();
+    depthTexture.destroy();
+    depthTexture.release();
+  }
+
   // Create the depth texture
   TextureDescriptor depthTextureDesc;
   depthTextureDesc.dimension = TextureDimension::_2D;
@@ -555,19 +571,26 @@ void Application::InitializePipeline() {
   // Default value as well (irrelevant for count = 1 anyways)
   pipelineDesc.multisample.alphaToCoverageEnabled = false;
 
-  // Define binding layout (don't forget to = Default)
-  BindGroupLayoutEntry bindingLayout = Default;
-  // The binding index as used in the @binding attribute in the shader
+  // Create a binding group
+  std::vector<BindGroupLayoutEntry> bindingLayoutEntries(2, Default);
+
+  BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
   bindingLayout.binding = 0;
-  // The stage(s) that needs to access this resource(s)
   bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
   bindingLayout.buffer.type = BufferBindingType::Uniform;
   bindingLayout.buffer.minBindingSize = sizeof(MyUniforms);
 
-  // Create a bind group layout
+  // The texture binding
+  BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
+  textureBindingLayout.binding = 1;
+  textureBindingLayout.visibility = ShaderStage::Fragment;
+  textureBindingLayout.texture.sampleType = TextureSampleType::Float;
+  textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
+  // A bind group contains one or multiple bindings
   BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-  bindGroupLayoutDesc.entryCount = 1;
-  bindGroupLayoutDesc.entries = &bindingLayout;
+  bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
+  bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
   bindGroupLayout = device.createBindGroupLayout(bindGroupLayoutDesc);
 
   // Create the pipeline layout
@@ -623,9 +646,15 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
 
 bool Application::InitializeBuffers() {
 
+  texture = ResourceManager::loadTexture(256, 256, device, &textureView);
+  if (!texture) {
+    std::cerr << "Could not load texture!" << std::endl;
+    return false;
+  }
+
   // Load mesh data from OBJ file
   std::vector<VertexAttributes> vertexData;
-  bool success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/mammoth.obj", vertexData);
+  bool success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/plane.obj", vertexData);
   if (!success) {
     std::cerr << "Could not load geometry!" << std::endl;
     return false;
@@ -655,8 +684,10 @@ bool Application::InitializeBuffers() {
   uniforms.time = 1.0f;
   uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
   uniforms.modelMatrix = glm::mat4(1.0f);
-  uniforms.viewMatrix = glm::lookAt(glm::vec3(0.0f, -2.0f, 1.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-  uniforms.projectionMatrix = glm::perspective(glm::radians(45.0f), 640.0f / 480.0f, 0.1f, 100.0f);
+  uniforms.viewMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
+  uniforms.projectionMatrix = glm::ortho(-1, 1, -1, 1, -1, 1);
+  //uniforms.viewMatrix = glm::lookAt(glm::vec3(0.0f, -2.0f, 1.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  //uniforms.projectionMatrix = glm::perspective(glm::radians(45.0f), 640.0f / 480.0f, 0.1f, 100.0f);
   queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 
   return true;
@@ -664,22 +695,18 @@ bool Application::InitializeBuffers() {
 
 void Application::InitializeBindGroups() {
   // Create a binding
-  BindGroupEntry binding{};
-  // The index of the binding (the entries in bindGroupDesc can be in any order)
-  binding.binding = 0;
-  // The buffer it is actually bound to
-  binding.buffer = uniformBuffer;
-  // We can specify an offset within the buffer, so that a single buffer can hold
-  // multiple uniform blocks.
-  binding.offset = 0;
-  // And we specify again the size of the buffer.
-  binding.size = sizeof(MyUniforms);
+  std::vector<BindGroupEntry> bindings(2);
+  bindings[0].binding = 0;
+  bindings[0].buffer = uniformBuffer;
+  bindings[0].offset = 0;
+  bindings[0].size = sizeof(MyUniforms);
 
-  // A bind group contains one or multiple bindings
-  BindGroupDescriptor bindGroupDesc{};
+  bindings[1].binding = 1;
+  bindings[1].textureView = textureView;
+
+  BindGroupDescriptor bindGroupDesc;
   bindGroupDesc.layout = bindGroupLayout;
-  // There must be as many bindings as declared in the layout!
-  bindGroupDesc.entryCount = 1;
-  bindGroupDesc.entries = &binding;
+  bindGroupDesc.entryCount = (uint32_t)bindings.size();
+  bindGroupDesc.entries = bindings.data();
   bindGroup = device.createBindGroup(bindGroupDesc);
 }

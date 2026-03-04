@@ -33,4 +33,9 @@ public:
 	
 	// Load an 3D mesh from a standard .obj file into a vertex data buffer
 	static bool loadGeometryFromObj(const std::filesystem::path& path, std::vector<VertexAttributes>& vertexData);
+
+	// Load an image from a standard image file into a new texture object
+	// NB: The texture must be destroyed after use
+	//static wgpu::Texture loadTexture(const std::filesystem::path& path, wgpu::Device m_device, wgpu::TextureView* pTextureView = nullptr);
+	static wgpu::Texture loadTexture(const int width, const int height, wgpu::Device m_device, wgpu::TextureView* pTextureView = nullptr);
 };
