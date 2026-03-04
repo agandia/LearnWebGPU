@@ -6,6 +6,7 @@ struct VertexInput {
 	@location(0) position: vec3f,
 	@location(1) normal: vec3f,
 	@location(2) color: vec3f,
+	@location(3) uv: vec2f,
 };
 
 /**
@@ -17,6 +18,7 @@ struct VertexOutput {
 	@builtin(position) position: vec4f,
 	@location(0) color: vec3f,
 	@location(1) normal: vec3f,
+	@location(2) uv: vec2f,
 };
 
 /**
@@ -42,6 +44,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 	// Forward the normal
   out.normal = (uMyUniforms.modelMatrix * vec4f(in.normal, 0.0)).xyz;
 	out.color = in.color;
+	out.uv = in.uv; // Map from [-1, 1] to [0, 1]
 	return out;
 }
 
@@ -57,7 +60,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	let shading2 = max(0.0, dot(lightDirection2, normal));
 	let shading = shading1 * lightColor1 + shading2 * lightColor2;
 	//let color = in.color * shading;
-	let color = textureLoad(gradientTexture, vec2<i32>(in.position.xy), 0).rgb;
+
+	let texCoords = vec2i(in.uv * vec2f(textureDimensions(gradientTexture)));
+	let color = shading * textureLoad(gradientTexture, texCoords, 0).rgb;
 
 	// Gamma-correction
 	let linear_color = pow(color, vec3f(2.2));

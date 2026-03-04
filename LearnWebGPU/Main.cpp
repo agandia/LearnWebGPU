@@ -274,14 +274,14 @@ void Application::MainLoop() {
   queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, time), &time, sizeof(float));
 
   //Update the model  Matrix
-  //float angle1 = time;
-  //glm::mat4 M(1.0f);  
-  //M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
-  //M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
-  //M = glm::scale(M, glm::vec3(0.3f));
-  //uniforms.modelMatrix = M;
+  float angle1 = time;
+  glm::mat4 M(1.0f);  
+  M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
+  M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
+  M = glm::scale(M, glm::vec3(0.3f));
+  uniforms.modelMatrix = M;
 
-  //queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
+  queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
   
   // Get the next target texture/surface view
   TextureView targetView = GetNextSurfaceTextureView();
@@ -469,8 +469,7 @@ void Application::InitializePipeline() {
   // Configure the vertex pipeline
   // We use one vertex buffer
   VertexBufferLayout vertexBufferLayout;
-  // But we have now 2 different attributes
-  std::vector<VertexAttribute> vertexAttribs(3);
+  std::vector<VertexAttribute> vertexAttribs(4);
 
   // For each attrib, describe its layout, aka how to interpret the data
   // Position attribute
@@ -487,6 +486,11 @@ void Application::InitializePipeline() {
   vertexAttribs[2].shaderLocation = 2;
   vertexAttribs[2].format = VertexFormat::Float32x3;
   vertexAttribs[2].offset = offsetof(VertexAttributes, color);
+
+  // UV attribute
+  vertexAttribs[3].shaderLocation = 3;
+  vertexAttribs[3].format = VertexFormat::Float32x2;
+  vertexAttribs[3].offset = offsetof(VertexAttributes, uv);
 
   vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
   vertexBufferLayout.attributes = vertexAttribs.data();
@@ -617,17 +621,13 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   requiredLimits.limits = supportedLimits.limits; // Start with the supported limits as a base, then override the ones we want to require
 
   // We use at most 3 vertex attribute for now
-  requiredLimits.limits.maxVertexAttributes = 3;
+  requiredLimits.limits.maxVertexAttributes = 4;
 
   // We should also tell that we use 1 vertex buffer
   requiredLimits.limits.maxVertexBuffers = 1;
-  // Maximum size of a buffer is 6 vertices of 5 float each.
   requiredLimits.limits.maxBufferSize = 1500000 * sizeof(VertexAttributes);
-  // Maximum stride between 2 consecutive vertices in the vertex buffer
   requiredLimits.limits.maxVertexBufferArrayStride = sizeof(VertexAttributes);
-
-  // There is a maximum of 3 float forwarded from vertex to fragment shader
-  requiredLimits.limits.maxInterStageShaderComponents = 6;
+  requiredLimits.limits.maxInterStageShaderComponents = 8;
 
   // We use at most 1 bind group for now
   requiredLimits.limits.maxBindGroups = 1;
@@ -654,7 +654,7 @@ bool Application::InitializeBuffers() {
 
   // Load mesh data from OBJ file
   std::vector<VertexAttributes> vertexData;
-  bool success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/plane.obj", vertexData);
+  bool success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/cube.obj", vertexData);
   if (!success) {
     std::cerr << "Could not load geometry!" << std::endl;
     return false;
@@ -684,10 +684,8 @@ bool Application::InitializeBuffers() {
   uniforms.time = 1.0f;
   uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
   uniforms.modelMatrix = glm::mat4(1.0f);
-  uniforms.viewMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
-  uniforms.projectionMatrix = glm::ortho(-1, 1, -1, 1, -1, 1);
-  //uniforms.viewMatrix = glm::lookAt(glm::vec3(0.0f, -2.0f, 1.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-  //uniforms.projectionMatrix = glm::perspective(glm::radians(45.0f), 640.0f / 480.0f, 0.1f, 100.0f);
+  uniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  uniforms.projectionMatrix = glm::perspective(glm::radians(45.0f), 640.0f / 480.0f, 0.01f, 100.0f);
   queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
 
   return true;
