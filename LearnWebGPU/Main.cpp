@@ -55,8 +55,7 @@
 #include "ResourceManager.h"
 
 using namespace wgpu;
-
-constexpr float PI = 3.14159265358979323846f;
+using VertexAttributes = ResourceManager::VertexAttributes;
 
 class Application {
 public:
@@ -87,16 +86,6 @@ private:
     float _pad[3];
   } uniforms;
 
-  /**
- * A structure that describes the data layout in the vertex buffer
- * We do not instantiate it but use it in `sizeof` and `offsetof`
- */
-  struct VertexAttributes {
-    glm::vec3 position;
-    glm::vec3 normal;
-    glm::vec3 color;
-  };
-
   // Have the compiler check byte alignment
   static_assert(sizeof(MyUniforms) % 16 == 0);
 
@@ -105,7 +94,7 @@ private:
 
   void InitializePipeline();
   RequiredLimits GetRequiredLimits(Adapter adapter) const;
-  void InitializeBuffers();
+  bool InitializeBuffers();
   void InitializeBindGroups();
 
   // Shared data between init and main loop.
@@ -118,10 +107,9 @@ private:
   Texture depthTexture;
   TextureView depthTextureView;
   RenderPipeline pipeline;
-  Buffer pointBuffer;
-  Buffer indexBuffer;
+  Buffer vertexBuffer;
   Buffer uniformBuffer;
-  uint32_t indexCount;
+  uint32_t vertexCount;
   BindGroup bindGroup;
   PipelineLayout layout;
   BindGroupLayout bindGroupLayout;
@@ -247,7 +235,7 @@ bool Application::Initialize() {
 
   InitializePipeline();
 
-  InitializeBuffers();
+  if (!InitializeBuffers()) { return false; }
 
   InitializeBindGroups();
 
@@ -259,8 +247,7 @@ void Application::Terminate() {
   layout.release();
   bindGroupLayout.release();
   uniformBuffer.release();
-  pointBuffer.release();
-  indexBuffer.release();
+  vertexBuffer.release();
   pipeline.release();
   surface.unconfigure();
   queue.release();
@@ -282,10 +269,12 @@ void Application::MainLoop() {
 
   //Update the model  Matrix
   float angle1 = time;
-  glm::mat4 S = glm::scale(glm::mat4(1.0), glm::vec3(0.3f));
-  glm::mat4 T1 = glm::translate(glm::mat4(1.0), glm::vec3(0.5, 0.0, 0.0));
-  glm::mat4 R1 = glm::rotate(glm::mat4(1.0f), angle1, glm::vec3(0.0f, 0.0f, 1.0f));
-  uniforms.modelMatrix = R1 * T1 * S;
+  glm::mat4 M(1.0f);  
+  M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
+  M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
+  M = glm::scale(M, glm::vec3(0.3f));
+  uniforms.modelMatrix = M;
+
   queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
 
   // Get the next target texture/surface view
@@ -349,16 +338,13 @@ void Application::MainLoop() {
   renderPass.setPipeline(pipeline);
 
   // Set vertex buffer while encoding the render pass
-  renderPass.setVertexBuffer(0, pointBuffer, 0, pointBuffer.getSize());
-
-  // The second argument must correspond to the choice of uint16_t or uint32_t when creating the index buffer, and to the index format specified in the pipeline.
-  renderPass.setIndexBuffer(indexBuffer, IndexFormat::Uint16, 0, indexBuffer.getSize());
+  renderPass.setVertexBuffer(0, vertexBuffer, 0, vertexCount * sizeof(VertexAttributes));
 
   //Set the bind group for the render pass
   renderPass.setBindGroup(0, bindGroup, 0, nullptr);
 
   // Draw 1 instance of 3 vertices, without an index buffer
-  renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
+  renderPass.draw(vertexCount, 1, 0, 0);
 
   renderPass.end();
   renderPass.release();
@@ -613,7 +599,7 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   // We should also tell that we use 1 vertex buffer
   requiredLimits.limits.maxVertexBuffers = 1;
   // Maximum size of a buffer is 6 vertices of 5 float each.
-  requiredLimits.limits.maxBufferSize = 16 * sizeof(VertexAttributes);
+  requiredLimits.limits.maxBufferSize = 1500000 * sizeof(VertexAttributes);
   // Maximum stride between 2 consecutive vertices in the vertex buffer
   requiredLimits.limits.maxVertexBufferArrayStride = sizeof(VertexAttributes);
 
@@ -635,41 +621,25 @@ RequiredLimits Application::GetRequiredLimits(Adapter adapter) const {
   return requiredLimits;
 }
 
-void Application::InitializeBuffers() {
+bool Application::InitializeBuffers() {
 
-  // Define data vectors, but without filling them in
-  std::vector<float> pointData;
-  std::vector<uint16_t> indexData;
-
-  // Here we use the new 'loadGeometry' function:
-  bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/pyramid.txt", pointData, indexData, 6);
-
-  // Check for errors
+  // Load mesh data from OBJ file
+  std::vector<VertexAttributes> vertexData;
+  bool success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/mammoth.obj", vertexData);
   if (!success) {
     std::cerr << "Could not load geometry!" << std::endl;
-    exit(1);
+    return false;
   }
-
-  indexCount = static_cast<uint32_t>(indexData.size());
 
   // Create vertex buffer
   BufferDescriptor bufferDesc;
-  bufferDesc.size = pointData.size() * sizeof(float);
-  bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Vertex; // Vertex usage here!
+  bufferDesc.size = vertexData.size() * sizeof(VertexAttributes);
+  bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Vertex;
   bufferDesc.mappedAtCreation = false;
-  pointBuffer = device.createBuffer(bufferDesc);
+  vertexBuffer = device.createBuffer(bufferDesc);
+  queue.writeBuffer(vertexBuffer, 0, vertexData.data(), bufferDesc.size);
 
-  // Upload geometry data to the buffer
-  queue.writeBuffer(pointBuffer, 0, pointData.data(), bufferDesc.size);
-
-  // Create index buffer
-  // (we reuse the bufferDesc initialized for the pointBuffer)
-  bufferDesc.size = indexData.size() * sizeof(uint16_t);
-  bufferDesc.size = (bufferDesc.size + 3) & ~3; // round up to the next multiple of 4
-  bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Index;
-  indexBuffer = device.createBuffer(bufferDesc);
-
-  queue.writeBuffer(indexBuffer, 0, indexData.data(), bufferDesc.size);
+  vertexCount = static_cast<int>(vertexData.size());
 
   // Create uniform buffer (reusing object and updating internal data)
   // The buffer is structured so the internal members are aligned to 16 bytes, so we can just use the size of the struct.
@@ -685,9 +655,11 @@ void Application::InitializeBuffers() {
   uniforms.time = 1.0f;
   uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
   uniforms.modelMatrix = glm::mat4(1.0f);
-  uniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  uniforms.viewMatrix = glm::lookAt(glm::vec3(0.0f, -2.0f, 1.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
   uniforms.projectionMatrix = glm::perspective(glm::radians(45.0f), 640.0f / 480.0f, 0.1f, 100.0f);
   queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
+
+  return true;
 }
 
 void Application::InitializeBindGroups() {

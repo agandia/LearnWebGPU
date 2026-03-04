@@ -19,7 +19,7 @@ add_subdirectory(webgpu)
 add_subdirectory(glfw3webgpu)
 
 # Add source to this project's executable.
-add_executable (LearnWebGPU "Main.cpp" "ResourceManager.h" "ResourceManager.cpp")
+add_executable (LearnWebGPU "Main.cpp" "ResourceManager.h" "ResourceManager.cpp" "tiny_obj_loader.h")
 
 target_include_directories(LearnWebGPU PRIVATE .)
 
