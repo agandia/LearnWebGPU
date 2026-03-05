@@ -4,10 +4,6 @@
 #include <glfw3webgpu.h>
 #include <GLFW/glfw3.h>
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#endif // __EMSCRIPTEN__
-
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_FORCE_LEFT_HANDED
 #include <glm/glm.hpp>
@@ -158,6 +154,9 @@ bool Application::isRunning()
 // When resizing, we need to re-create the swap chain and depth buffer with the new size.
 void Application::onResize()
 {
+	// Add a ward
+	if (mWindowWidth <= 0 || mWindowHeight <= 0) return;
+
 	// Terminate in reverse order
 	terminateDepthBuffer();
 	terminateSurfaceConfig();
@@ -193,7 +192,7 @@ bool Application::initWindowAndDevice()
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // NO_API bc We don't want OpenGL in the back, we'll use WebGPU instead.
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE); 
 
-	mWindow = glfwCreateWindow(640, 480, "[WebGPU] 3D Playground", NULL, NULL);
+	mWindow = glfwCreateWindow(mWindowWidth, mWindowHeight, "[WebGPU] 3D Playground", NULL, NULL);
 	if (!mWindow) {
 		std::cerr << "Could not open window!" << std::endl;
 		return false;
@@ -251,13 +250,21 @@ bool Application::initWindowAndDevice()
 
   // Store a pointer to the application in the GLFW window, so we can access it in callbacks if needed
   glfwSetWindowUserPointer(mWindow, this);
+	
+
+#ifndef __EMSCRIPTEN__
 	// We can go either with a matching signature fn or a non capturing lambda
-	glfwSetFramebufferSizeCallback(mWindow, [](GLFWwindow* window, int /*width*/, int /*height*/) {
+	glfwSetFramebufferSizeCallback(mWindow, [](GLFWwindow* window, int width, int height) {
+		//std::cout << "[GLFW] framebuffer resize: " << width << " x " << height << std::endl;
+
 		Application* that = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
 		if (that != nullptr) {
-			that->onResize();
+			that->handleResize(width, height);
 		}
-    });
+		});
+#else
+	emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false, browserResizeCallback);
+#endif
 
 
 	adapter.release();
@@ -304,13 +311,9 @@ RequiredLimits Application::getRequiredLimits(Adapter adapter)
 
 void Application::configSurface()
 {
-	// Get the current size of the window's framebuffer:
-	int width, height;
-	glfwGetFramebufferSize(mWindow, &width, &height);
-
 	SurfaceConfiguration config{};
-	config.width = static_cast<uint32_t>(width);
-	config.height = static_cast<uint32_t>(height);
+	config.width = static_cast<uint32_t>(mWindowWidth);
+	config.height = static_cast<uint32_t>(mWindowHeight);
 	config.usage = TextureUsage::RenderAttachment;
 	config.format = mSurfaceFormat;
 	config.viewFormatCount = 0;
@@ -329,17 +332,13 @@ void Application::terminateSurfaceConfig()
 
 bool Application::initDepthBuffer()
 {
-	// Get the current size of the window's framebuffer:
-	int width, height;
-	glfwGetFramebufferSize(mWindow, &width, &height);
-
 	// Create the depth texture
 	TextureDescriptor depthTextureDesc{};
 	depthTextureDesc.dimension = TextureDimension::_2D;
 	depthTextureDesc.format = mDepthTextureFormat;
 	depthTextureDesc.mipLevelCount = 1;
 	depthTextureDesc.sampleCount = 1;
-	depthTextureDesc.size = { static_cast<uint32_t>(width),static_cast<uint32_t>(height), 1 };
+	depthTextureDesc.size = { static_cast<uint32_t>(mWindowWidth),static_cast<uint32_t>(mWindowHeight), 1 };
 	depthTextureDesc.usage = TextureUsage::RenderAttachment;
 	depthTextureDesc.viewFormatCount = 1;
 	depthTextureDesc.viewFormats = (WGPUTextureFormat*)&mDepthTextureFormat;
@@ -662,11 +661,33 @@ void Application::terminateBindGroup()
   mBindGroup.release();
 }
 
+void Application::handleResize(int width, int height)
+{
+	mWindowWidth = width;
+	mWindowHeight = height;
+  onResize();
+}
+
+
+#ifdef __EMSCRIPTEN__
+EM_BOOL Application::browserResizeCallback(int eventType, const EmscriptenUiEvent* event, void* userData) {
+	int width = event->windowInnerWidth;
+	int height = event->windowInnerHeight;
+
+	//std::cout << "[Browser] window resize: " << width << " x " << height << std::endl;
+
+	emscripten_set_canvas_element_size("#canvas", width, height);
+
+	Application* app = reinterpret_cast<Application*>(userData);
+  app->handleResize(width, height);
+
+	return EM_TRUE;
+}
+#endif
+
 void Application::updateProjectionMatrix()
 {
-	int width, height;
-	glfwGetFramebufferSize(mWindow, &width, &height);
-	float ratio = width / (float)height;
+	float ratio = mWindowWidth / (float)mWindowHeight;
 	mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, ratio, 0.01f, 100.0f);
 	mQueue.writeBuffer(
 		mUniformBuffer,

@@ -3,6 +3,11 @@
 #include <webgpu/webgpu.hpp>
 #include <glm/glm.hpp>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/html5.h>
+#endif // __EMSCRIPTEN__
+
  // Forward declare
 struct GLFWwindow;
 
@@ -51,6 +56,10 @@ private:
 	bool initBindGroup();
 	void terminateBindGroup();
 	
+  void handleResize(int width, int height);
+#ifdef __EMSCRIPTEN__
+	static EM_BOOL browserResizeCallback(int eventType, const EmscriptenUiEvent* event, void* userData);
+#endif
 	void updateProjectionMatrix();
 
 private:
@@ -72,6 +81,9 @@ private:
 
 	// Window and Device
 	GLFWwindow* mWindow = nullptr;
+  uint32_t mWindowWidth = 640;
+  uint32_t mWindowHeight = 480;
+
 	wgpu::Surface mSurface = nullptr;
 	wgpu::Device mDevice = nullptr;
 	wgpu::Queue mQueue = nullptr;
