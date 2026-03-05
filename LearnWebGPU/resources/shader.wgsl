@@ -24,7 +24,7 @@ struct VertexOutput {
 /**
  * A structure holding the value of our uniforms
  */
-struct MyUniforms {
+struct BasicShaderUniforms {
     projectionMatrix: mat4x4f,
     viewMatrix: mat4x4f,
     modelMatrix: mat4x4f,
@@ -32,7 +32,7 @@ struct MyUniforms {
     time: f32,
 };
 
-@group(0) @binding(0) var<uniform> uMyUniforms: MyUniforms; // A uniform struct variable that we can set from the CPU
+@group(0) @binding(0) var<uniform> uUniforms: BasicShaderUniforms; // A uniform struct variable that we can set from the CPU
 @group(0) @binding(1) var gradientTexture: texture_2d<f32>;
 @group(0) @binding(2) var textureSampler: sampler;
 
@@ -41,9 +41,9 @@ const pi = 3.14159265359;
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
 	var out: VertexOutput;
-	out.position = uMyUniforms.projectionMatrix * uMyUniforms.viewMatrix * uMyUniforms.modelMatrix * vec4f(in.position, 1.0);
+	out.position = uUniforms.projectionMatrix * uUniforms.viewMatrix * uUniforms.modelMatrix * vec4f(in.position, 1.0);
 	// Forward the normal
-  out.normal = (uMyUniforms.modelMatrix * vec4f(in.normal, 0.0)).xyz;
+  out.normal = (uUniforms.modelMatrix * vec4f(in.normal, 0.0)).xyz;
 	out.color = in.color;
 	out.uv = in.uv; // Map from [-1, 1] to [0, 1]
 

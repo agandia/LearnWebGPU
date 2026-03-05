@@ -498,7 +498,7 @@ bool Application::initTexture()
 	samplerDesc.maxAnisotropy = 1;
 	mSampler = mDevice.createSampler(samplerDesc);
 
-	mTexture = ResourceManager::loadTexture(RESOURCE_DIR "/fourareen2k_albedo.jpg", mDevice, &mTextureView);
+	mTexture = ResourceManager::loadTexture(RESOURCE_DIR "/fourareen2K_albedo.jpg", mDevice, &mTextureView);
 	if (!mTexture) {
 		std::cerr << "Could not load texture!" << std::endl;
 		return false;
