@@ -34,6 +34,7 @@ bool Application::onInit()
 void Application::onFrame()
 {
 	glfwPollEvents();
+	updateDragInertia();
 
 	// Update any uniforms that require new values each frame.
 	float time = static_cast<float>(glfwGetTime());
@@ -50,9 +51,9 @@ void Application::onFrame()
 
 	mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, modelMatrix), &mUniforms.modelMatrix, sizeof(BasicShaderUniforms::modelMatrix));
 
-	float viewZ = glm::mix(0.0f, 0.25f, glm::cos(2 * glm::pi<float>() * time / 4.0f) * 0.5f + 0.5f);
-	mUniforms.viewMatrix = glm::lookAt(glm::vec3(-0.5f, -1.5f, viewZ + 0.25f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-	mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, viewMatrix), &mUniforms.viewMatrix, sizeof(BasicShaderUniforms::viewMatrix));
+	//float viewZ = glm::mix(0.0f, 0.25f, glm::cos(2 * glm::pi<float>() * time / 4.0f) * 0.5f + 0.5f);
+	//mUniforms.viewMatrix = glm::lookAt(glm::vec3(-0.5f, -1.5f, viewZ + 0.25f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	//mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, viewMatrix), &mUniforms.viewMatrix, sizeof(BasicShaderUniforms::viewMatrix));
 	
 	TextureView nextTexture = getNextSurfaceTextureView();
 	if (!nextTexture) {
@@ -168,6 +169,47 @@ void Application::onResize()
   updateProjectionMatrix();
 }
 
+void Application::onMouseMove(double xpos, double ypos)
+{
+	if (mDragState.active) {
+		glm::vec2 currentMouse = glm::vec2(-(float)xpos, (float)ypos);
+		glm::vec2 delta = (currentMouse - mDragState.startMouse) * mDragState.sensitivity;
+		mCameraState.angles = mDragState.startCameraState.angles + delta;
+		// Clamp to avoid going too far when orbiting up/down
+		mCameraState.angles.y = glm::clamp(mCameraState.angles.y, -glm::pi<float>() / 2 + 1e-5f, glm::pi<float>() / 2 - 1e-5f);
+		updateViewMatrix();
+
+		// Inertia
+		mDragState.velocity = delta - mDragState.previousDelta;
+		mDragState.previousDelta = delta;
+	}
+}
+
+void Application::onMouseButton(int button, int action, int /*mods*/)
+{
+	if (button == GLFW_MOUSE_BUTTON_LEFT) {
+		switch (action) {
+		case GLFW_PRESS:
+			mDragState.active = true;
+			double xpos, ypos;
+			glfwGetCursorPos(mWindow, &xpos, &ypos);
+			mDragState.startMouse = glm::vec2(-(float)xpos, (float)ypos);
+			mDragState.startCameraState = mCameraState;
+			break;
+		case GLFW_RELEASE:
+			mDragState.active = false;
+			break;
+		}
+	}
+}
+
+void Application::onScroll(double /*xoffset*/, double yoffset)
+{
+	mCameraState.zoom += mDragState.scrollSensitivity * static_cast<float>(yoffset);
+	mCameraState.zoom = glm::clamp(mCameraState.zoom, -2.0f, 2.0f);
+	updateViewMatrix();
+}
+
 bool Application::initWindowAndDevice()
 {
 
@@ -253,19 +295,43 @@ bool Application::initWindowAndDevice()
 	
 
 #ifndef __EMSCRIPTEN__
-	// We can go either with a matching signature fn or a non capturing lambda
 	glfwSetFramebufferSizeCallback(mWindow, [](GLFWwindow* window, int width, int height) {
 		//std::cout << "[GLFW] framebuffer resize: " << width << " x " << height << std::endl;
-
 		Application* that = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
 		if (that != nullptr) {
 			that->handleResize(width, height);
 		}
-		});
+	});
+
+	glfwSetCursorPosCallback(mWindow, [](GLFWwindow* window, double xpos, double ypos) {
+		auto that = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+		if (that != nullptr) that->onMouseMove(xpos, ypos);
+	});
+
+	glfwSetMouseButtonCallback(mWindow, [](GLFWwindow* window, int button, int action, int mods) {
+		auto that = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+		if (that != nullptr) that->onMouseButton(button, action, mods);
+	});
+
+	glfwSetScrollCallback(mWindow, [](GLFWwindow* window, double xoffset, double yoffset) {
+		auto that = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+		if (that != nullptr) that->onScroll(xoffset, yoffset);
+	});
 #else
 	emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false, browserResizeCallback);
-#endif
 
+	emscripten_set_mousemove_callback("#canvas", this, true, mouseMoveCallback);
+
+	emscripten_set_mousedown_callback("#canvas", this, true, mouseDownCallback);
+
+	emscripten_set_mouseup_callback("#canvas", this, true, mouseUpCallback);
+
+	emscripten_set_wheel_callback("#canvas", this, true, wheelCallback);
+
+	//emscripten_set_keydown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, keyDownCallback);
+
+	//emscripten_set_keyup_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, keyUpCallback);
+#endif
 
 	adapter.release();
 	return mDevice != nullptr;
@@ -616,7 +682,8 @@ bool Application::initUniforms()
 
 	// Upload the initial value of the uniforms
 	mUniforms.modelMatrix = glm::mat4(1.0f);
-	mUniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	//mUniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  updateViewMatrix();
 	//mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, 640.0f / 480.0f, 0.01f, 100.0f);
   updateProjectionMatrix();
 	mUniforms.time = 1.0f;
@@ -670,7 +737,7 @@ void Application::handleResize(int width, int height)
 
 
 #ifdef __EMSCRIPTEN__
-EM_BOOL Application::browserResizeCallback(int eventType, const EmscriptenUiEvent* event, void* userData) {
+EM_BOOL Application::browserResizeCallback(int /*eventType*/, const EmscriptenUiEvent* event, void* userData) {
 	int width = event->windowInnerWidth;
 	int height = event->windowInnerHeight;
 
@@ -683,7 +750,63 @@ EM_BOOL Application::browserResizeCallback(int eventType, const EmscriptenUiEven
 
 	return EM_TRUE;
 }
+
+EM_BOOL Application::mouseMoveCallback(int /*eventType*/, const EmscriptenMouseEvent* e, void* userData) {
+	Application* app = reinterpret_cast<Application*>(userData);
+
+	double x = e->targetX;
+	double y = e->targetY;
+
+	app->onMouseMove(x, y);
+
+	return EM_TRUE;
+}
+
+EM_BOOL Application::mouseDownCallback(int /*eventType*/, const EmscriptenMouseEvent* e, void* userData) {
+	Application* app = reinterpret_cast<Application*>(userData);
+
+	int button = e->button;
+
+	app->onMouseButton(button, GLFW_PRESS, 0);
+
+	return EM_TRUE;
+}
+
+EM_BOOL Application::mouseUpCallback(int /*eventType*/, const EmscriptenMouseEvent* e, void* userData) {
+	Application* app = reinterpret_cast<Application*>(userData);
+
+	int button = e->button;
+
+	app->onMouseButton(button, GLFW_RELEASE, 0);
+
+	return EM_TRUE;
+}
+
+EM_BOOL Application::wheelCallback(int /*eventType*/ , const EmscriptenWheelEvent* e, void* userData) {
+	Application* app = reinterpret_cast<Application*>(userData);
+
+	double normalized = -e->deltaY * 0.01;
+	app->onScroll(0.0, normalized);
+
+	return EM_TRUE;
+}
 #endif
+
+void Application::updateViewMatrix()
+{
+	float cx = cos(mCameraState.angles.x);
+	float sx = sin(mCameraState.angles.x);
+	float cy = cos(mCameraState.angles.y);
+	float sy = sin(mCameraState.angles.y);
+	glm::vec3 position = glm::vec3(cx * cy, sx * cy, sy) * std::exp(-mCameraState.zoom);
+	mUniforms.viewMatrix = glm::lookAt(position, glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	mQueue.writeBuffer(
+		mUniformBuffer,
+		offsetof(BasicShaderUniforms, viewMatrix),
+		&mUniforms.viewMatrix,
+		sizeof(BasicShaderUniforms::viewMatrix)
+	);
+}
 
 void Application::updateProjectionMatrix()
 {
@@ -695,4 +818,22 @@ void Application::updateProjectionMatrix()
 		&mUniforms.projectionMatrix,
 		sizeof(BasicShaderUniforms::projectionMatrix)
 	);
+}
+
+void Application::updateDragInertia()
+{
+	constexpr float eps = 1e-4f;
+	// Apply inertia only when the user released the click.
+	if (!mDragState.active) {
+		// Avoid updating the matrix when the velocity is no longer noticeable
+		if (std::abs(mDragState.velocity.x) < eps && std::abs(mDragState.velocity.y) < eps) {
+			return;
+		}
+		mCameraState.angles += mDragState.velocity;
+		mCameraState.angles.y = glm::clamp(mCameraState.angles.y, -glm::pi<float>() / 2 + 1e-5f, glm::pi<float>() / 2 - 1e-5f);
+		// Dampen the velocity so that it decreases exponentially and stops
+		// after a few frames.
+		mDragState.velocity *= mDragState.inertia;
+		updateViewMatrix();
+	}
 }
