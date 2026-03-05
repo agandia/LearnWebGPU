@@ -64,6 +64,12 @@ private:
 	void terminateBindGroup();
 	
   void handleResize(int width, int height);
+
+	// GUI
+	bool initGui();
+	void terminateGui();
+	void updateGui(wgpu::RenderPassEncoder renderPass);
+
 #ifdef __EMSCRIPTEN__
 	static EM_BOOL browserResizeCallback(int eventType, const EmscriptenUiEvent* event, void* userData);
 
@@ -126,8 +132,8 @@ private:
 
 	// Window and Device
 	GLFWwindow* mWindow = nullptr;
-  uint32_t mWindowWidth = 1920;
-  uint32_t mWindowHeight = 1080;
+  uint32_t mWindowWidth = 1080;
+  uint32_t mWindowHeight = 720;
 
 	wgpu::Surface mSurface = nullptr;
 	wgpu::Device mDevice = nullptr;

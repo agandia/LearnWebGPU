@@ -18,13 +18,15 @@ add_subdirectory(webgpu)
 # Add a little extension of glfw that connects it to WebGPU
 add_subdirectory(glfw3webgpu)
 
+add_subdirectory(imgui)
+
 # Add source to this project's executable.
 add_executable (LearnWebGPU "Main.cpp" "ResourceManager.h" "ResourceManager.cpp" "tiny_obj_loader.h" "stb_image.h" "Application.h" "Application.cpp" "implementations.cpp")
 
 target_include_directories(LearnWebGPU PRIVATE .)
 
 # Add the "webgpu" target as a dependency of the executable
-target_link_libraries(LearnWebGPU PRIVATE webgpu glfw glfw3webgpu)
+target_link_libraries(LearnWebGPU PRIVATE webgpu glfw glfw3webgpu imgui)
 
 # We add an option to enable different settings when developing the app than
 # when distributing it.

@@ -9,6 +9,10 @@
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
 
+#include <imgui.h>
+#include <backends/imgui_impl_wgpu.h>
+#include <backends/imgui_impl_glfw.h>
+
 #include <iostream>
 #include <cassert>
 #include <filesystem>
@@ -28,6 +32,7 @@ bool Application::onInit()
   if (!initGeometry()) return false;
   if (!initUniforms()) return false;
   if (!initBindGroup()) return false;
+	if (!initGui()) return false;
   return true;
 }
 
@@ -110,6 +115,9 @@ void Application::onFrame()
 	renderPass.draw(mVertexCount, 1, 0, 0);
   //renderPass.drawIndexed(mVertexCount, 1, 0, 0, 0); // <- Alternative for indexed
 
+	// We add the GUI drawing commands to the render pass
+	updateGui(renderPass);
+
 	renderPass.end();
 	renderPass.release();
 
@@ -137,6 +145,7 @@ void Application::onFrame()
 void Application::onFinish()
 {
   // Each part of the renderer takes care of cleaning up after itself, call in reverse order
+	terminateGui();
   terminateBindGroup();
   terminateUniforms();
   terminateGeometry();
@@ -187,6 +196,13 @@ void Application::onMouseMove(double xpos, double ypos)
 
 void Application::onMouseButton(int button, int action, int /*mods*/)
 {
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.WantCaptureMouse) {
+		// Don't rotate the camera if the mouse is already captured by an ImGui
+		// interaction at this frame.
+		return;
+	}
+
 	if (button == GLFW_MOUSE_BUTTON_LEFT) {
 		switch (action) {
 		case GLFW_PRESS:
@@ -205,6 +221,13 @@ void Application::onMouseButton(int button, int action, int /*mods*/)
 
 void Application::onScroll(double /*xoffset*/, double yoffset)
 {
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.WantCaptureMouse) {
+		// Don't rotate the camera if the mouse is already captured by an ImGui
+		// interaction at this frame.
+		return;
+	}
+
 	mCameraState.zoom += mDragState.scrollSensitivity * static_cast<float>(yoffset);
 	mCameraState.zoom = glm::clamp(mCameraState.zoom, -2.0f, 2.0f);
 	updateViewMatrix();
@@ -233,6 +256,20 @@ bool Application::initWindowAndDevice()
 
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // NO_API bc We don't want OpenGL in the back, we'll use WebGPU instead.
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE); 
+
+
+#ifdef __EMSCRIPTEN__
+	double width, height;
+	// TODO: This is a bit of a hack, before initializing the window we need to query the size of the browser's viewport,
+	// not the canvas, the canvas will return default init values (300x150) so we want the viewport.
+	
+	// If you want the actual viewport size instead:
+	emscripten_get_element_css_size("#canvas", &width, &height);
+
+	mWindowWidth = width;
+	mWindowHeight = height;
+
+#endif
 
 	mWindow = glfwCreateWindow(mWindowWidth, mWindowHeight, "[WebGPU] 3D Playground", NULL, NULL);
 	if (!mWindow) {
@@ -291,8 +328,7 @@ bool Application::initWindowAndDevice()
 #endif
 
   // Store a pointer to the application in the GLFW window, so we can access it in callbacks if needed
-  glfwSetWindowUserPointer(mWindow, this);
-	
+  glfwSetWindowUserPointer(mWindow, this);	
 
 #ifndef __EMSCRIPTEN__
 	glfwSetFramebufferSizeCallback(mWindow, [](GLFWwindow* window, int width, int height) {
@@ -362,7 +398,7 @@ RequiredLimits Application::getRequiredLimits(Adapter adapter)
 	requiredLimits.limits.maxBufferSize = 1500000 * sizeof(ResourceManager::VertexAttributes);
 	requiredLimits.limits.maxVertexBufferArrayStride = sizeof(ResourceManager::VertexAttributes);
 	requiredLimits.limits.maxInterStageShaderComponents = 8;
-	requiredLimits.limits.maxBindGroups = 1;
+	requiredLimits.limits.maxBindGroups = 2; // ImGui creates a second BindGroup
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
 	requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4 * sizeof(float);
 	// For now allow textures up to 2k
@@ -735,6 +771,67 @@ void Application::handleResize(int width, int height)
   onResize();
 }
 
+bool Application::initGui()
+{
+	// Setup Dear ImGui context
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGui::GetIO();
+
+	// Setup Platform/Renderer backends
+	ImGui_ImplGlfw_InitForOther(mWindow, true);
+	ImGui_ImplWGPU_Init(mDevice, 3, mSurfaceFormat, mDepthTextureFormat);
+	return true;
+}
+
+void Application::terminateGui()
+{
+	ImGui_ImplGlfw_Shutdown();
+	ImGui_ImplWGPU_Shutdown();
+}
+
+void Application::updateGui(wgpu::RenderPassEncoder renderPass)
+{
+	// Start the Dear ImGui frame
+	ImGui_ImplWGPU_NewFrame();
+	ImGui_ImplGlfw_NewFrame();
+	ImGui::NewFrame();
+	{
+		//std::cout << " [Update GUI] mWindow Size: " << mWindowWidth << ", " << mWindowHeight << std::endl;
+		// Build our UI
+		static float f = 0.0f;
+		static int counter = 0;
+		static bool show_demo_window = true;
+		static bool show_another_window = false;
+		static ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+
+		ImGui::Begin("Hello, world!");                                // Create a window called "Hello, world!" and append into it.
+
+		ImGui::Text("This is some useful text.");                     // Display some text (you can use a format strings too)
+		ImGui::Checkbox("Demo Window", &show_demo_window);            // Edit bools storing our window open/close state
+		ImGui::Checkbox("Another Window", &show_another_window);
+
+		ImGui::SliderFloat("float", &f, 0.0f, 1.0f);                  // Edit 1 float using a slider from 0.0f to 1.0f
+		ImGui::ColorEdit3("clear color", (float*)&clear_color);       // Edit 3 floats representing a color
+
+		if (ImGui::Button("Button"))                                  // Buttons return true when clicked (most widgets return true when edited/activated)
+			counter++;
+		ImGui::SameLine();
+		ImGui::Text("counter = %d", counter);
+
+		ImGuiIO& io = ImGui::GetIO();
+		ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+		ImGui::End();
+	}
+
+	// Draw the UI
+	ImGui::EndFrame();
+	// Convert the UI defined above into low-level drawing commands
+	ImGui::Render();
+	// Execute the low-level drawing commands on the WebGPU backend
+	ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), renderPass);
+}
+
 
 #ifdef __EMSCRIPTEN__
 EM_BOOL Application::browserResizeCallback(int /*eventType*/, const EmscriptenUiEvent* event, void* userData) {
@@ -742,11 +839,11 @@ EM_BOOL Application::browserResizeCallback(int /*eventType*/, const EmscriptenUi
 	int height = event->windowInnerHeight;
 
 	//std::cout << "[Browser] window resize: " << width << " x " << height << std::endl;
-
+	
 	emscripten_set_canvas_element_size("#canvas", width, height);
 
 	Application* app = reinterpret_cast<Application*>(userData);
-  app->handleResize(width, height);
+	app->handleResize(width, height);
 
 	return EM_TRUE;
 }
