@@ -155,6 +155,20 @@ bool Application::isRunning()
   return !glfwWindowShouldClose(mWindow);
 }
 
+// When resizing, we need to re-create the swap chain and depth buffer with the new size.
+void Application::onResize()
+{
+	// Terminate in reverse order
+	terminateDepthBuffer();
+	terminateSurfaceConfig();
+
+	// Re-init
+	configSurface();
+	initDepthBuffer();
+
+  updateProjectionMatrix();
+}
+
 bool Application::initWindowAndDevice()
 {
 
@@ -177,7 +191,7 @@ bool Application::initWindowAndDevice()
 	}
 
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // NO_API bc We don't want OpenGL in the back, we'll use WebGPU instead.
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // No resizing for now
+	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE); 
 
 	mWindow = glfwCreateWindow(640, 480, "[WebGPU] 3D Playground", NULL, NULL);
 	if (!mWindow) {
@@ -235,6 +249,17 @@ bool Application::initWindowAndDevice()
 	mSurfaceFormat = TextureFormat::BGRA8Unorm;
 #endif
 
+  // Store a pointer to the application in the GLFW window, so we can access it in callbacks if needed
+  glfwSetWindowUserPointer(mWindow, this);
+	// We can go either with a matching signature fn or a non capturing lambda
+	glfwSetFramebufferSizeCallback(mWindow, [](GLFWwindow* window, int /*width*/, int /*height*/) {
+		Application* that = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+		if (that != nullptr) {
+			that->onResize();
+		}
+    });
+
+
 	adapter.release();
 	return mDevice != nullptr;
 }
@@ -279,9 +304,13 @@ RequiredLimits Application::getRequiredLimits(Adapter adapter)
 
 void Application::configSurface()
 {
+	// Get the current size of the window's framebuffer:
+	int width, height;
+	glfwGetFramebufferSize(mWindow, &width, &height);
+
 	SurfaceConfiguration config{};
-	config.width = 640;
-	config.height = 480;
+	config.width = static_cast<uint32_t>(width);
+	config.height = static_cast<uint32_t>(height);
 	config.usage = TextureUsage::RenderAttachment;
 	config.format = mSurfaceFormat;
 	config.viewFormatCount = 0;
@@ -300,13 +329,17 @@ void Application::terminateSurfaceConfig()
 
 bool Application::initDepthBuffer()
 {
+	// Get the current size of the window's framebuffer:
+	int width, height;
+	glfwGetFramebufferSize(mWindow, &width, &height);
+
 	// Create the depth texture
 	TextureDescriptor depthTextureDesc{};
 	depthTextureDesc.dimension = TextureDimension::_2D;
 	depthTextureDesc.format = mDepthTextureFormat;
 	depthTextureDesc.mipLevelCount = 1;
 	depthTextureDesc.sampleCount = 1;
-	depthTextureDesc.size = { 640, 480, 1 };
+	depthTextureDesc.size = { static_cast<uint32_t>(width),static_cast<uint32_t>(height), 1 };
 	depthTextureDesc.usage = TextureUsage::RenderAttachment;
 	depthTextureDesc.viewFormatCount = 1;
 	depthTextureDesc.viewFormats = (WGPUTextureFormat*)&mDepthTextureFormat;
@@ -585,7 +618,8 @@ bool Application::initUniforms()
 	// Upload the initial value of the uniforms
 	mUniforms.modelMatrix = glm::mat4(1.0f);
 	mUniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-	mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, 640.0f / 480.0f, 0.01f, 100.0f);
+	//mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, 640.0f / 480.0f, 0.01f, 100.0f);
+  updateProjectionMatrix();
 	mUniforms.time = 1.0f;
 	mUniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
 	mQueue.writeBuffer(mUniformBuffer, 0, &mUniforms, sizeof(BasicShaderUniforms));
@@ -626,4 +660,18 @@ bool Application::initBindGroup()
 void Application::terminateBindGroup()
 {
   mBindGroup.release();
+}
+
+void Application::updateProjectionMatrix()
+{
+	int width, height;
+	glfwGetFramebufferSize(mWindow, &width, &height);
+	float ratio = width / (float)height;
+	mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, ratio, 0.01f, 100.0f);
+	mQueue.writeBuffer(
+		mUniformBuffer,
+		offsetof(BasicShaderUniforms, projectionMatrix),
+		&mUniforms.projectionMatrix,
+		sizeof(BasicShaderUniforms::projectionMatrix)
+	);
 }

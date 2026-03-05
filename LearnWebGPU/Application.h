@@ -20,6 +20,8 @@ public:
 	// keep alive check
 	bool isRunning();
 
+	void onResize();
+
 private:
 	bool initWindowAndDevice();
 	void terminateWindowAndDevice();
@@ -48,6 +50,8 @@ private:
 
 	bool initBindGroup();
 	void terminateBindGroup();
+	
+	void updateProjectionMatrix();
 
 private:
 
