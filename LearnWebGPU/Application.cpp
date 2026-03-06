@@ -21,16 +21,29 @@
 
 using namespace wgpu;
 
+#include <glm/gtx/polar_coordinates.hpp>
+
+namespace ImGui {
+	bool DragDirection(const char* label, glm::vec4& direction) {
+		glm::vec2 angles = glm::degrees(glm::polar(glm::vec3(direction)));
+		bool changed = ImGui::DragFloat2(label, glm::value_ptr(angles));
+		direction = glm::vec4(glm::euclidean(glm::radians(angles)), direction.w);
+		return changed;
+	}
+}
+
 bool Application::onInit()
 {
   // Initialization battery test
   if (!initWindowAndDevice()) return false;
 	configSurface();
   if (!initDepthBuffer()) return false;
+	if (!initBindGroupLayout()) return false;
   if (!initRenderPipeline()) return false;
   if (!initTexture()) return false;
   if (!initGeometry()) return false;
   if (!initUniforms()) return false;
+  if (!initLightingUniforms()) return false;
   if (!initBindGroup()) return false;
 	if (!initGui()) return false;
   return true;
@@ -40,22 +53,28 @@ void Application::onFrame()
 {
 	glfwPollEvents();
 	updateDragInertia();
-
+	if (mLightUniformsChanged) {
+		updateLightingUniforms();
+		mLightUniformsChanged = false;
+	}
+	
 	// Update any uniforms that require new values each frame.
 	float time = static_cast<float>(glfwGetTime());
 	// Only update the 1-st float of the buffer
 	mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, time), &time, sizeof(float));
 
 	//Update the model  Matrix
-	float angle1 = time;
-	glm::mat4 M(1.0f);
-	M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
-	M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
-	M = glm::scale(M, glm::vec3(0.3f));
-	mUniforms.modelMatrix = M;
+	if (rotateModel) {
+		float angle1 = time;
+		glm::mat4 M(1.0f);
+		M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
+		M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
+		M = glm::scale(M, glm::vec3(0.3f));
+		mUniforms.modelMatrix = M;
 
-	mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, modelMatrix), &mUniforms.modelMatrix, sizeof(BasicShaderUniforms::modelMatrix));
-
+		mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, modelMatrix), &mUniforms.modelMatrix, sizeof(BasicShaderUniforms::modelMatrix));
+	}
+	
 	//float viewZ = glm::mix(0.0f, 0.25f, glm::cos(2 * glm::pi<float>() * time / 4.0f) * 0.5f + 0.5f);
 	//mUniforms.viewMatrix = glm::lookAt(glm::vec3(-0.5f, -1.5f, viewZ + 0.25f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 	//mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, viewMatrix), &mUniforms.viewMatrix, sizeof(BasicShaderUniforms::viewMatrix));
@@ -147,10 +166,12 @@ void Application::onFinish()
   // Each part of the renderer takes care of cleaning up after itself, call in reverse order
 	terminateGui();
   terminateBindGroup();
+	terminateLightingUniforms();
   terminateUniforms();
   terminateGeometry();
   terminateTexture();
   terminateRenderPipeline();
+	terminateBindGroupLayout();
   terminateDepthBuffer();
   terminateSurfaceConfig();
   terminateWindowAndDevice();
@@ -399,7 +420,7 @@ RequiredLimits Application::getRequiredLimits(Adapter adapter)
 	requiredLimits.limits.maxVertexBufferArrayStride = sizeof(ResourceManager::VertexAttributes);
 	requiredLimits.limits.maxInterStageShaderComponents = 8;
 	requiredLimits.limits.maxBindGroups = 2; // ImGui creates a second BindGroup
-	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
+	requiredLimits.limits.maxUniformBuffersPerShaderStage = 2;
 	requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4 * sizeof(float);
 	// For now allow textures up to 2k
 	requiredLimits.limits.maxTextureDimension1D = 2048;
@@ -569,34 +590,6 @@ bool Application::initRenderPipeline()
 	// Default value as well (irrelevant for count = 1 anyways)
 	pipelineDesc.multisample.alphaToCoverageEnabled = false;
 
-	// Create a binding group
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(3, Default);
-
-	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
-	bindingLayout.binding = 0;
-	bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
-	bindingLayout.buffer.type = BufferBindingType::Uniform;
-	bindingLayout.buffer.minBindingSize = sizeof(BasicShaderUniforms);
-
-	// The texture binding
-	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
-	textureBindingLayout.binding = 1;
-	textureBindingLayout.visibility = ShaderStage::Fragment;
-	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
-	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
-
-	// The texture sampler binding
-	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[2];
-	samplerBindingLayout.binding = 2;
-	samplerBindingLayout.visibility = ShaderStage::Fragment;
-	samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
-
-	// A bind group contains one or multiple bindings
-	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-	bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
-	bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
-	mBindGroupLayout = mDevice.createBindGroupLayout(bindGroupLayoutDesc);
-
 	// Create the pipeline layout
 	PipelineLayoutDescriptor layoutDesc{};
 	layoutDesc.bindGroupLayoutCount = 1;
@@ -735,10 +728,86 @@ void Application::terminateUniforms()
 	mUniformBuffer.release();
 }
 
+bool Application::initLightingUniforms()
+{
+	// Create uniform buffer
+	BufferDescriptor bufferDesc{};
+	bufferDesc.size = sizeof(LightingUniforms);
+	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
+	bufferDesc.mappedAtCreation = false;
+	mLightUniformBuffer = mDevice.createBuffer(bufferDesc);
+
+	// Initial values
+	mLightUniforms.directions[0] = { 0.5f, -0.9f, 0.1f, 0.0f };
+	mLightUniforms.directions[1] = { 0.2f, 0.4f, 0.3f, 0.0f };
+	mLightUniforms.colors[0] = { 1.0f, 0.9f, 0.6f, 1.0f };
+	mLightUniforms.colors[1] = { 0.6f, 0.9f, 1.0f, 1.0f };
+
+	updateLightingUniforms();
+
+	return mLightUniformBuffer != nullptr;
+}
+
+void Application::terminateLightingUniforms()
+{
+	mLightUniformBuffer.destroy();
+	mLightUniformBuffer.release();
+}
+
+void Application::updateLightingUniforms()
+{
+	mQueue.writeBuffer(mLightUniformBuffer, 0, &mLightUniforms, sizeof(LightingUniforms));
+}
+
+bool Application::initBindGroupLayout()
+{
+	// Create a binding group
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(4, Default);
+
+	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
+	bindingLayout.binding = 0;
+	bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
+	bindingLayout.buffer.type = BufferBindingType::Uniform;
+	bindingLayout.buffer.minBindingSize = sizeof(BasicShaderUniforms);
+
+	// The texture binding
+	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
+	textureBindingLayout.binding = 1;
+	textureBindingLayout.visibility = ShaderStage::Fragment;
+	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
+	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
+	// The texture sampler binding
+	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[2];
+	samplerBindingLayout.binding = 2;
+	samplerBindingLayout.visibility = ShaderStage::Fragment;
+	samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
+
+	// The lighting uniform buffer binding
+	BindGroupLayoutEntry& lightingUniformLayout = bindingLayoutEntries[3];
+	lightingUniformLayout.binding = 3;
+	lightingUniformLayout.visibility = ShaderStage::Fragment; // only Fragment is needed
+	lightingUniformLayout.buffer.type = BufferBindingType::Uniform;
+	lightingUniformLayout.buffer.minBindingSize = sizeof(LightingUniforms);
+
+	// A bind group contains one or multiple bindings
+	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
+	bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
+	bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
+	mBindGroupLayout = mDevice.createBindGroupLayout(bindGroupLayoutDesc);
+
+	return mBindGroupLayout != nullptr;
+}
+
+void Application::terminateBindGroupLayout()
+{
+	mBindGroupLayout.release();
+}
+
 bool Application::initBindGroup()
 {
 	// Create a binding
-	std::vector<BindGroupEntry> bindings(3);
+	std::vector<BindGroupEntry> bindings(4);
 	bindings[0].binding = 0;
 	bindings[0].buffer = mUniformBuffer;
 	bindings[0].offset = 0;
@@ -749,6 +818,11 @@ bool Application::initBindGroup()
 
 	bindings[2].binding = 2;
 	bindings[2].sampler = mSampler;
+
+	bindings[3].binding = 3;
+	bindings[3].buffer = mLightUniformBuffer;
+	bindings[3].offset = 0;
+	bindings[3].size = sizeof(LightingUniforms);
 
 	BindGroupDescriptor bindGroupDesc{};
 	bindGroupDesc.layout = mBindGroupLayout;
@@ -799,25 +873,20 @@ void Application::updateGui(wgpu::RenderPassEncoder renderPass)
 	{
 		//std::cout << " [Update GUI] mWindow Size: " << mWindowWidth << ", " << mWindowHeight << std::endl;
 		// Build our UI
-		static float f = 0.0f;
-		static int counter = 0;
-		static bool show_demo_window = true;
-		static bool show_another_window = false;
-		static ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-		ImGui::Begin("Hello, world!");                                // Create a window called "Hello, world!" and append into it.
+		ImGui::Begin("3D Playground!");
 
-		ImGui::Text("This is some useful text.");                     // Display some text (you can use a format strings too)
-		ImGui::Checkbox("Demo Window", &show_demo_window);            // Edit bools storing our window open/close state
-		ImGui::Checkbox("Another Window", &show_another_window);
+		ImGui::Text("NOTE: Window resizing is broken on web for the current build.");
+		ImGui::Checkbox("Rotate Model", &rotateModel);
 
-		ImGui::SliderFloat("float", &f, 0.0f, 1.0f);                  // Edit 1 float using a slider from 0.0f to 1.0f
-		ImGui::ColorEdit3("clear color", (float*)&clear_color);       // Edit 3 floats representing a color
-
-		if (ImGui::Button("Button"))                                  // Buttons return true when clicked (most widgets return true when edited/activated)
-			counter++;
-		ImGui::SameLine();
-		ImGui::Text("counter = %d", counter);
+		bool changed = false;
+		ImGui::SeparatorText("Lighting");
+		changed = ImGui::ColorEdit3("Color #0", glm::value_ptr(mLightUniforms.colors[0])) || changed;
+		changed = ImGui::DragDirection("Direction #0", mLightUniforms.directions[0]) || changed;
+		changed = ImGui::ColorEdit3("Color #1", glm::value_ptr(mLightUniforms.colors[1])) || changed;
+		changed = ImGui::DragDirection("Direction #1", mLightUniforms.directions[1]) || changed;
+		
+		mLightUniformsChanged = changed;
 
 		ImGuiIO& io = ImGui::GetIO();
 		ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);

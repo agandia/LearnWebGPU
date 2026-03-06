@@ -8,6 +8,8 @@
 #include <emscripten/html5.h>
 #endif // __EMSCRIPTEN__
 
+#include <array>
+
  // Forward declare
 struct GLFWwindow;
 
@@ -60,6 +62,13 @@ private:
 	bool initUniforms();
 	void terminateUniforms();
 
+	bool initLightingUniforms();
+	void terminateLightingUniforms();
+	void updateLightingUniforms();
+
+	bool initBindGroupLayout();
+	void terminateBindGroupLayout();
+
 	bool initBindGroup();
 	void terminateBindGroup();
 	
@@ -103,6 +112,12 @@ private:
 	// Have the compiler check byte alignment
 	static_assert(sizeof(BasicShaderUniforms) % 16 == 0);
 
+	struct LightingUniforms {
+		std::array<glm::vec4, 2> directions;
+		std::array<glm::vec4, 2> colors;
+	};
+	static_assert(sizeof(LightingUniforms) % 16 == 0);
+
 	struct CameraState {
 		// angles.x is the rotation of the camera around the global vertical axis, affected by mouse.x
 		// angles.y is the rotation of the camera around its local horizontal axis, affected by mouse.y
@@ -132,6 +147,8 @@ private:
 
 	// Window and Device
 	GLFWwindow* mWindow = nullptr;
+	uint32_t mNewWindowWidth = 1080;
+	uint32_t mNewWindowHeight = 720;
   uint32_t mWindowWidth = 1080;
   uint32_t mWindowHeight = 720;
 
@@ -168,9 +185,17 @@ private:
 	wgpu::Buffer mUniformBuffer = nullptr;
 	BasicShaderUniforms mUniforms;
 
+	wgpu::Buffer mLightUniformBuffer = nullptr;
+	LightingUniforms mLightUniforms;
+	bool mLightUniformsChanged = false;
+
 	// Bind Group
 	wgpu::BindGroup mBindGroup = nullptr;
 
   CameraState mCameraState;
   DragState mDragState;
+
+	//GUI
+	float f = 0.0f;
+	bool rotateModel = true;
 };

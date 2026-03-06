@@ -32,9 +32,18 @@ struct BasicShaderUniforms {
     time: f32,
 };
 
+/**
+ * A structure holding the lighting settings
+ */
+struct LightingUniforms {
+    directions: array<vec4f, 2>,
+    colors: array<vec4f, 2>,
+}
+
 @group(0) @binding(0) var<uniform> uUniforms: BasicShaderUniforms; // A uniform struct variable that we can set from the CPU
-@group(0) @binding(1) var gradientTexture: texture_2d<f32>;
+@group(0) @binding(1) var baseColorTexture: texture_2d<f32>;
 @group(0) @binding(2) var textureSampler: sampler;
+@group(0) @binding(3) var<uniform> uLighting: LightingUniforms;
 
 const pi = 3.14159265359;
 
@@ -52,21 +61,22 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-	let normal = normalize(in.normal);
+	// Compute shading
+    let normal = normalize(in.normal);
+    var shading = vec3f(0.0);
+    for (var i: i32 = 0; i < 2; i++) {
+        let direction = normalize(uLighting.directions[i].xyz);
+        let color = uLighting.colors[i].rgb;
+        shading += max(0.0, dot(direction, normal)) * color;
+    }
+    
+    // Sample texture
+    let baseColor = textureSample(baseColorTexture, textureSampler, in.uv).rgb;
 
-	//let lightColor1 = vec3f(1.0, 0.9, 0.6);
-	//let lightColor2 = vec3f(0.6, 0.9, 1.0);
-	//let lightDirection1 = vec3f(0.5, -0.9, 0.1);
-	//let lightDirection2 = vec3f(0.2, 0.4, 0.3);
-	//let shading1 = max(0.0, dot(lightDirection1, normal));
-	//let shading2 = max(0.0, dot(lightDirection2, normal));
-	//let shading = shading1 * lightColor1 + shading2 * lightColor2;
-	//let color = in.color * shading;
+    // Combine texture and lighting
+    let color = baseColor * shading;
 
-	//let texCoords = vec2i(in.uv * vec2f(textureDimensions(gradientTexture)));
-	let color = textureSample(gradientTexture, textureSampler, in.uv).rgb;
-
-	// Gamma-correction
-	let linear_color = pow(color, vec3f(2.2));
-	return vec4f(linear_color, 1.0); // use the interpolated color coming from the vertex shader
+    // Gamma-correction
+    let corrected_color = pow(color, vec3f(2.2));
+    return vec4f(corrected_color, uUniforms.color.a);
 }
