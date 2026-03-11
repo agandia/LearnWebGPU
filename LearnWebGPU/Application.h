@@ -118,6 +118,16 @@ private:
 	};
 	static_assert(sizeof(LightingUniforms) % 16 == 0);
 
+	struct RenderObject {
+		wgpu::Buffer vertexBuffer;
+		int vertexCount = 0;
+
+		wgpu::Buffer uniformBuffer;
+		BasicShaderUniforms uniforms;
+		wgpu::BindGroup bindGroup;
+	};
+
+
 	struct CameraState {
 		// angles.x is the rotation of the camera around the global vertical axis, affected by mouse.x
 		// angles.y is the rotation of the camera around its local horizontal axis, affected by mouse.y
@@ -177,20 +187,22 @@ private:
 	wgpu::Texture mTexture = nullptr;
 	wgpu::TextureView mTextureView = nullptr;
 
-	// Geometry
-	wgpu::Buffer mVertexBuffer = nullptr;
-	int mVertexCount = 0;
+	std::vector<RenderObject> mObjects;
 
-	// Uniforms
-	wgpu::Buffer mUniformBuffer = nullptr;
-	BasicShaderUniforms mUniforms;
+	//// Geometry
+	//wgpu::Buffer mVertexBuffer = nullptr;
+	//int mVertexCount = 0;
+	//
+	//// Uniforms
+	//wgpu::Buffer mUniformBuffer = nullptr;
+	//BasicShaderUniforms mUniforms;
 
 	wgpu::Buffer mLightUniformBuffer = nullptr;
 	LightingUniforms mLightUniforms;
 	bool mLightUniformsChanged = false;
 
-	// Bind Group
-	wgpu::BindGroup mBindGroup = nullptr;
+	//// Bind Group
+	//wgpu::BindGroup mBindGroup = nullptr;
 
   CameraState mCameraState;
   DragState mDragState;

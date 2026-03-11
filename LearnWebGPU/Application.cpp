@@ -61,18 +61,20 @@ void Application::onFrame()
 	// Update any uniforms that require new values each frame.
 	float time = static_cast<float>(glfwGetTime());
 	// Only update the 1-st float of the buffer
-	mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, time), &time, sizeof(float));
+	// mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, time), &time, sizeof(float));
+	
+	if (rotateModel && !mObjects.empty())
+	{
+		// A bit hacky way of rotatin only the boat model
+		auto& boat = mObjects[0];
 
-	//Update the model  Matrix
-	if (rotateModel) {
-		float angle1 = time;
 		glm::mat4 M(1.0f);
-		M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
-		M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
+		M = glm::rotate(M, time, glm::vec3(0, 0, 1));
 		M = glm::scale(M, glm::vec3(0.3f));
-		mUniforms.modelMatrix = M;
 
-		mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, modelMatrix), &mUniforms.modelMatrix, sizeof(BasicShaderUniforms::modelMatrix));
+		boat.uniforms.modelMatrix = M;
+
+		mQueue.writeBuffer(boat.uniformBuffer, offsetof(BasicShaderUniforms, modelMatrix), &boat.uniforms.modelMatrix, sizeof(glm::mat4));
 	}
 	
 	//float viewZ = glm::mix(0.0f, 0.25f, glm::cos(2 * glm::pi<float>() * time / 4.0f) * 0.5f + 0.5f);
@@ -126,12 +128,19 @@ void Application::onFrame()
 
 	renderPass.setPipeline(mPipeline);
 
-	renderPass.setVertexBuffer(0, mVertexBuffer, 0, mVertexCount * sizeof(ResourceManager::VertexAttributes));
+	for (auto& obj : mObjects)
+	{
+		renderPass.setVertexBuffer(
+			0,
+			obj.vertexBuffer,
+			0,
+			obj.vertexCount * sizeof(ResourceManager::VertexAttributes)
+		);
 
-	// Set binding group
-	renderPass.setBindGroup(0, mBindGroup, 0, nullptr);
+		renderPass.setBindGroup(0, obj.bindGroup, 0, nullptr);
 
-	renderPass.draw(mVertexCount, 1, 0, 0);
+		renderPass.draw(obj.vertexCount, 1, 0, 0);
+	}
   //renderPass.drawIndexed(mVertexCount, 1, 0, 0, 0); // <- Alternative for indexed
 
 	// We add the GUI drawing commands to the render pass
@@ -680,52 +689,98 @@ bool Application::initGeometry()
 		return false;
 	}
 
+	RenderObject boat;
+
 	// Create vertex buffer
 	BufferDescriptor bufferDesc{};
 	bufferDesc.size = vertexData.size() * sizeof(ResourceManager::VertexAttributes);
 	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Vertex;
 	bufferDesc.mappedAtCreation = false;
-	mVertexBuffer = mDevice.createBuffer(bufferDesc);
-	mQueue.writeBuffer(mVertexBuffer, 0, vertexData.data(), bufferDesc.size);
+	boat.vertexBuffer = mDevice.createBuffer(bufferDesc);
+	mQueue.writeBuffer(boat.vertexBuffer, 0, vertexData.data(), bufferDesc.size);
 
-	mVertexCount = static_cast<int>(vertexData.size());
+	boat.vertexCount = static_cast<int>(vertexData.size());
+	mObjects.push_back(boat);
 
-	return mVertexBuffer != nullptr;
+	// Load a second mesh data
+	std::vector<ResourceManager::VertexAttributes> vertexData2;
+	success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/plane.obj", vertexData2);
+	if (!success) {
+		std::cerr << "Could not load geometry!" << std::endl;
+		return false;
+	}
+
+	RenderObject ground;
+	bufferDesc.size = vertexData2.size() * sizeof(ResourceManager::VertexAttributes);
+	ground.vertexBuffer = mDevice.createBuffer(bufferDesc);
+
+	mQueue.writeBuffer(ground.vertexBuffer, 0, vertexData2.data(), bufferDesc.size);
+
+	ground.vertexCount = static_cast<int>(vertexData2.size());
+	mObjects.push_back(ground);
+
+	return (boat.vertexBuffer != nullptr && ground.vertexBuffer != nullptr);
 }
 
 void Application::terminateGeometry()
 {
-	mVertexBuffer.destroy();
-	mVertexBuffer.release();
-	mVertexCount = 0;
+	for (RenderObject& obj : mObjects) {
+		obj.vertexBuffer.destroy();
+		obj.vertexBuffer.release();
+		obj.vertexCount = 0;
+	}
 }
 
 bool Application::initUniforms()
 {
-	// Create uniform buffer
-	BufferDescriptor bufferDesc{};
-	bufferDesc.size = sizeof(BasicShaderUniforms);
-	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
-	bufferDesc.mappedAtCreation = false;
-	mUniformBuffer = mDevice.createBuffer(bufferDesc);
+	for (RenderObject& obj : mObjects) {
+		// Create uniform buffer
+		BufferDescriptor bufferDesc{};
+		bufferDesc.size = sizeof(BasicShaderUniforms);
+		bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
+		bufferDesc.mappedAtCreation = false;
+		obj.uniformBuffer = mDevice.createBuffer(bufferDesc);
 
-	// Upload the initial value of the uniforms
-	mUniforms.modelMatrix = glm::mat4(1.0f);
-	//mUniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-  updateViewMatrix();
-	//mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, 640.0f / 480.0f, 0.01f, 100.0f);
-  updateProjectionMatrix();
-	mUniforms.time = 1.0f;
-	mUniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
-	mQueue.writeBuffer(mUniformBuffer, 0, &mUniforms, sizeof(BasicShaderUniforms));
+		// Upload the initial value of the uniforms
+		obj.uniforms.modelMatrix = glm::mat4(1.0f);
+		//mUniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		
+		//mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, 640.0f / 480.0f, 0.01f, 100.0f);
+		
+		obj.uniforms.time = 1.0f;
+		obj.uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
+		
 
-	return mUniformBuffer != nullptr;
+		if (obj.uniformBuffer == nullptr) return false;
+	}
+	//Hacky translation of the plane
+	if (mObjects.size() >= 2) {
+
+		// boat
+		mObjects[0].uniforms.modelMatrix =
+			glm::scale(glm::mat4(1.0f), glm::vec3(0.3f));
+
+		// ground
+		mObjects[1].uniforms.modelMatrix =
+			glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -0.15f));
+	}
+
+	updateViewMatrix();
+	updateProjectionMatrix();
+
+	for (RenderObject& obj : mObjects) {
+		mQueue.writeBuffer(obj.uniformBuffer, 0, &obj.uniforms, sizeof(BasicShaderUniforms));
+	}
+
+	return true;
 }
 
 void Application::terminateUniforms()
 {
-	mUniformBuffer.destroy();
-	mUniformBuffer.release();
+	for (RenderObject& obj : mObjects) {
+		obj.uniformBuffer.destroy();
+		obj.uniformBuffer.release();
+	}
 }
 
 bool Application::initLightingUniforms()
@@ -806,36 +861,45 @@ void Application::terminateBindGroupLayout()
 
 bool Application::initBindGroup()
 {
-	// Create a binding
-	std::vector<BindGroupEntry> bindings(4);
-	bindings[0].binding = 0;
-	bindings[0].buffer = mUniformBuffer;
-	bindings[0].offset = 0;
-	bindings[0].size = sizeof(BasicShaderUniforms);
+	bool clear = true;
+    for (auto& obj : mObjects)
+    {
+        std::vector<BindGroupEntry> bindings(4);
 
-	bindings[1].binding = 1;
-	bindings[1].textureView = mTextureView;
+        bindings[0].binding = 0;
+        bindings[0].buffer = obj.uniformBuffer;
+        bindings[0].offset = 0;
+        bindings[0].size = sizeof(BasicShaderUniforms);
 
-	bindings[2].binding = 2;
-	bindings[2].sampler = mSampler;
+        bindings[1].binding = 1;
+        bindings[1].textureView = mTextureView;
 
-	bindings[3].binding = 3;
-	bindings[3].buffer = mLightUniformBuffer;
-	bindings[3].offset = 0;
-	bindings[3].size = sizeof(LightingUniforms);
+        bindings[2].binding = 2;
+        bindings[2].sampler = mSampler;
 
-	BindGroupDescriptor bindGroupDesc{};
-	bindGroupDesc.layout = mBindGroupLayout;
-	bindGroupDesc.entryCount = (uint32_t)bindings.size();
-	bindGroupDesc.entries = bindings.data();
-	mBindGroup = mDevice.createBindGroup(bindGroupDesc);
+        bindings[3].binding = 3;
+        bindings[3].buffer = mLightUniformBuffer;
+        bindings[3].offset = 0;
+        bindings[3].size = sizeof(LightingUniforms);
 
-  return mBindGroup != nullptr;
+        BindGroupDescriptor desc{};
+        desc.layout = mBindGroupLayout;
+        desc.entryCount = (uint32_t)bindings.size();
+        desc.entries = bindings.data();
+
+        obj.bindGroup = mDevice.createBindGroup(desc);
+
+				if (obj.bindGroup == nullptr) return false;
+    }
+
+    return true;
 }
 
 void Application::terminateBindGroup()
 {
-  mBindGroup.release();
+	for (auto& obj : mObjects) {
+		obj.bindGroup.release();
+	}
 }
 
 void Application::handleResize(int width, int height)
@@ -965,25 +1029,30 @@ void Application::updateViewMatrix()
 	float cy = cos(mCameraState.angles.y);
 	float sy = sin(mCameraState.angles.y);
 	glm::vec3 position = glm::vec3(cx * cy, sx * cy, sy) * std::exp(-mCameraState.zoom);
-	mUniforms.viewMatrix = glm::lookAt(position, glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-	mQueue.writeBuffer(
-		mUniformBuffer,
-		offsetof(BasicShaderUniforms, viewMatrix),
-		&mUniforms.viewMatrix,
-		sizeof(BasicShaderUniforms::viewMatrix)
-	);
+	for (RenderObject& obj : mObjects) {
+		obj.uniforms.viewMatrix = glm::lookAt(position, glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		mQueue.writeBuffer(
+			obj.uniformBuffer,
+			offsetof(BasicShaderUniforms, viewMatrix),
+			&obj.uniforms.viewMatrix,
+			sizeof(BasicShaderUniforms::viewMatrix)
+		);
+	}
 }
 
 void Application::updateProjectionMatrix()
 {
 	float ratio = mWindowWidth / (float)mWindowHeight;
-	mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, ratio, 0.01f, 100.0f);
-	mQueue.writeBuffer(
-		mUniformBuffer,
-		offsetof(BasicShaderUniforms, projectionMatrix),
-		&mUniforms.projectionMatrix,
-		sizeof(BasicShaderUniforms::projectionMatrix)
-	);
+	glm::mat4 proj = glm::perspective(45 * glm::pi<float>() / 180.0f, ratio, 0.01f, 100.0f);
+	for (RenderObject& obj : mObjects) {
+		obj.uniforms.projectionMatrix = proj;
+		mQueue.writeBuffer(
+			obj.uniformBuffer,
+			offsetof(BasicShaderUniforms, projectionMatrix),
+			&obj.uniforms.projectionMatrix,
+			sizeof(BasicShaderUniforms::projectionMatrix)
+		);
+	}
 }
 
 void Application::updateDragInertia()
