@@ -51,8 +51,8 @@ private:
 	bool initRenderPipeline();
 	void terminateRenderPipeline();
 
-	bool initTexture();
-	void terminateTexture();
+	bool initTextures();
+	void terminateTextures();
 
 	wgpu::TextureView getNextSurfaceTextureView();
 
@@ -106,8 +106,8 @@ private:
 		glm::mat4 viewMatrix;
 		glm::mat4 modelMatrix;
 		glm::vec4 color;
+		glm::vec3 cameraWorldPosition;
 		float time;
-		float _pad[3];
 	};
 	// Have the compiler check byte alignment
 	static_assert(sizeof(BasicShaderUniforms) % 16 == 0);
@@ -115,6 +115,13 @@ private:
 	struct LightingUniforms {
 		std::array<glm::vec4, 2> directions;
 		std::array<glm::vec4, 2> colors;
+
+		// Material properties
+		float hardness = 32.0f;
+		float kd = 1.0f;
+		float ks = 0.5f;
+
+		float _pad[1];
 	};
 	static_assert(sizeof(LightingUniforms) % 16 == 0);
 
@@ -125,6 +132,12 @@ private:
 		wgpu::Buffer uniformBuffer;
 		BasicShaderUniforms uniforms;
 		wgpu::BindGroup bindGroup;
+
+		wgpu::Sampler sampler = nullptr;
+		wgpu::Texture albedo_texture = nullptr;
+		wgpu::TextureView albedo_textureView = nullptr;
+		wgpu::Texture normal_texture = nullptr;
+		wgpu::TextureView normal_textureView = nullptr;
 	};
 
 
@@ -182,10 +195,10 @@ private:
 	wgpu::ShaderModule mShaderModule = nullptr;
 	wgpu::RenderPipeline mPipeline = nullptr;
 
-	// Texture
-	wgpu::Sampler mSampler = nullptr;
-	wgpu::Texture mTexture = nullptr;
-	wgpu::TextureView mTextureView = nullptr;
+	//// Texture
+	//wgpu::Sampler mSampler = nullptr;
+	//wgpu::Texture mTexture = nullptr;
+	//wgpu::TextureView mTextureView = nullptr;
 
 	std::vector<RenderObject> mObjects;
 
@@ -199,7 +212,7 @@ private:
 
 	wgpu::Buffer mLightUniformBuffer = nullptr;
 	LightingUniforms mLightUniforms;
-	bool mLightUniformsChanged = false;
+	bool mLightUniformsChanged = true;
 
 	//// Bind Group
 	//wgpu::BindGroup mBindGroup = nullptr;

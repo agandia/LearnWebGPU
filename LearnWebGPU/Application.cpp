@@ -40,8 +40,8 @@ bool Application::onInit()
   if (!initDepthBuffer()) return false;
 	if (!initBindGroupLayout()) return false;
   if (!initRenderPipeline()) return false;
-  if (!initTexture()) return false;
   if (!initGeometry()) return false;
+	if (!initTextures()) return false;
   if (!initUniforms()) return false;
   if (!initLightingUniforms()) return false;
   if (!initBindGroup()) return false;
@@ -177,8 +177,8 @@ void Application::onFinish()
   terminateBindGroup();
 	terminateLightingUniforms();
   terminateUniforms();
+	terminateTextures();
   terminateGeometry();
-  terminateTexture();
   terminateRenderPipeline();
 	terminateBindGroupLayout();
   terminateDepthBuffer();
@@ -423,11 +423,11 @@ RequiredLimits Application::getRequiredLimits(Adapter adapter)
 	RequiredLimits requiredLimits = Default;
 	requiredLimits.limits = supportedLimits.limits; // Start with the supported limits as a base, then override the ones we want to require
 
-	requiredLimits.limits.maxVertexAttributes = 4;
+	requiredLimits.limits.maxVertexAttributes = 6;
 	requiredLimits.limits.maxVertexBuffers = 1;
 	requiredLimits.limits.maxBufferSize = 1500000 * sizeof(ResourceManager::VertexAttributes);
 	requiredLimits.limits.maxVertexBufferArrayStride = sizeof(ResourceManager::VertexAttributes);
-	requiredLimits.limits.maxInterStageShaderComponents = 8;
+	requiredLimits.limits.maxInterStageShaderComponents = 17;
 	requiredLimits.limits.maxBindGroups = 2; // ImGui creates a second BindGroup
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 2;
 	requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4 * sizeof(float);
@@ -435,7 +435,7 @@ RequiredLimits Application::getRequiredLimits(Adapter adapter)
 	requiredLimits.limits.maxTextureDimension1D = 2048;
 	requiredLimits.limits.maxTextureDimension2D = 2048;
 	requiredLimits.limits.maxTextureArrayLayers = 1;
-	requiredLimits.limits.maxSampledTexturesPerShaderStage = 1;
+	requiredLimits.limits.maxSampledTexturesPerShaderStage = 2;
 	requiredLimits.limits.maxSamplersPerShaderStage = 1;
 
 	return requiredLimits;
@@ -513,7 +513,7 @@ bool Application::initRenderPipeline()
 
 	RenderPipelineDescriptor pipelineDesc{};
 
-	std::vector<VertexAttribute> vertexAttribs(4);
+	std::vector<VertexAttribute> vertexAttribs(6);
 
 	// For each attrib, describe its layout, aka how to interpret the data
 	// Position attribute
@@ -535,6 +535,16 @@ bool Application::initRenderPipeline()
 	vertexAttribs[3].shaderLocation = 3;
 	vertexAttribs[3].format = VertexFormat::Float32x2;
 	vertexAttribs[3].offset = offsetof(ResourceManager::VertexAttributes, uv);
+
+	// Tangent attribute
+	vertexAttribs[4].shaderLocation = 4;
+	vertexAttribs[4].format = VertexFormat::Float32x3;
+	vertexAttribs[4].offset = offsetof(ResourceManager::VertexAttributes, tangent);
+
+	// Bitangent attribute
+	vertexAttribs[5].shaderLocation = 5;
+	vertexAttribs[5].format = VertexFormat::Float32x3;
+	vertexAttribs[5].offset = offsetof(ResourceManager::VertexAttributes, bitangent);
 
 	VertexBufferLayout vertexBufferLayout{};
 	vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
@@ -619,35 +629,54 @@ void Application::terminateRenderPipeline()
 	mBindGroupLayout.release();
 }
 
-bool Application::initTexture()
+bool Application::initTextures()
 {
-	SamplerDescriptor samplerDesc{};
-	samplerDesc.addressModeU = AddressMode::Repeat;
-	samplerDesc.addressModeV = AddressMode::Repeat;
-	samplerDesc.addressModeW = AddressMode::Repeat;
-	samplerDesc.magFilter = FilterMode::Linear;
-	samplerDesc.minFilter = FilterMode::Linear;
-	samplerDesc.mipmapFilter = MipmapFilterMode::Linear;
-	samplerDesc.lodMinClamp = 0.0f;
-	samplerDesc.lodMaxClamp = 8.0f;
-	samplerDesc.compare = CompareFunction::Undefined;
-	samplerDesc.maxAnisotropy = 1;
-	mSampler = mDevice.createSampler(samplerDesc);
+	bool lever = false;
+	for (RenderObject& obj : mObjects) {
+		SamplerDescriptor samplerDesc{};
+		samplerDesc.addressModeU = AddressMode::Repeat;
+		samplerDesc.addressModeV = AddressMode::Repeat;
+		samplerDesc.addressModeW = AddressMode::Repeat;
+		samplerDesc.magFilter = FilterMode::Linear;
+		samplerDesc.minFilter = FilterMode::Linear;
+		samplerDesc.mipmapFilter = MipmapFilterMode::Linear;
+		samplerDesc.lodMinClamp = 0.0f;
+		samplerDesc.lodMaxClamp = 8.0f;
+		samplerDesc.compare = CompareFunction::Undefined;
+		samplerDesc.maxAnisotropy = 1;
+		obj.sampler = mDevice.createSampler(samplerDesc);
 
-	mTexture = ResourceManager::loadTexture(RESOURCE_DIR "/fourareen2K_albedo.jpg", mDevice, &mTextureView);
-	if (!mTexture) {
-		std::cerr << "Could not load texture!" << std::endl;
-		return false;
+		// Hack to have the 2 object carry different textures
+		std::string name = lever ? "/cobblestone_floor_08_diff_2k.jpg" : "/fourareen2K_albedo.jpg";
+		
+		obj.albedo_texture = ResourceManager::loadTexture(RESOURCE_DIR + name, mDevice, &obj.albedo_textureView);
+		if (!obj.albedo_texture) {
+			std::cerr << "Could not load texture!" << std::endl;
+			return false;
+		}
+		name = lever ? "/cobblestone_floor_08_nor_gl_2k.png" : "/fourareen2K_normals.png";
+		lever = true;
+		obj.normal_texture = ResourceManager::loadTexture(RESOURCE_DIR + name, mDevice, &obj.normal_textureView);
+		if (!obj.normal_texture) {
+			std::cerr << "Could not load texture!" << std::endl;
+			return false;
+		}
+
 	}
-  return mTextureView != nullptr;
+	
+	return true;
+	
+  //return mTextureView != nullptr;
 }
 
-void Application::terminateTexture()
+void Application::terminateTextures()
 {
-	mTextureView.release();
-	mTexture.destroy();
-	mTexture.release();
-	mSampler.release();
+	for (RenderObject& obj : mObjects) {
+		obj.albedo_textureView.release();
+		obj.albedo_texture.destroy();
+		obj.albedo_texture.release();
+		obj.sampler.release();
+	}
 }
 
 TextureView Application::getNextSurfaceTextureView()
@@ -706,7 +735,7 @@ bool Application::initGeometry()
 	std::vector<ResourceManager::VertexAttributes> vertexData2;
 	success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/plane.obj", vertexData2);
 	if (!success) {
-		std::cerr << "Could not load geometry!" << std::endl;
+		std::cerr << "Could not load second geometry!" << std::endl;
 		return false;
 	}
 
@@ -729,6 +758,7 @@ void Application::terminateGeometry()
 		obj.vertexBuffer.release();
 		obj.vertexCount = 0;
 	}
+	mObjects.clear();
 }
 
 bool Application::initUniforms()
@@ -796,7 +826,7 @@ bool Application::initLightingUniforms()
 	mLightUniforms.directions[0] = { 0.5f, -0.9f, 0.1f, 0.0f };
 	mLightUniforms.directions[1] = { 0.2f, 0.4f, 0.3f, 0.0f };
 	mLightUniforms.colors[0] = { 1.0f, 0.9f, 0.6f, 1.0f };
-	mLightUniforms.colors[1] = { 0.6f, 0.9f, 1.0f, 1.0f };
+	mLightUniforms.colors[1] = { 1.0f, 1.0f, 0.8f, 1.0f };
 
 	updateLightingUniforms();
 
@@ -811,13 +841,16 @@ void Application::terminateLightingUniforms()
 
 void Application::updateLightingUniforms()
 {
-	mQueue.writeBuffer(mLightUniformBuffer, 0, &mLightUniforms, sizeof(LightingUniforms));
+	if (mLightUniformsChanged) {
+		mQueue.writeBuffer(mLightUniformBuffer, 0, &mLightUniforms, sizeof(LightingUniforms));
+		mLightUniformsChanged = false;
+	}
 }
 
 bool Application::initBindGroupLayout()
 {
 	// Create a binding group
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(4, Default);
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(5, Default);
 
 	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
 	bindingLayout.binding = 0;
@@ -825,22 +858,29 @@ bool Application::initBindGroupLayout()
 	bindingLayout.buffer.type = BufferBindingType::Uniform;
 	bindingLayout.buffer.minBindingSize = sizeof(BasicShaderUniforms);
 
-	// The texture binding
+	// The albedo texture binding
 	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
 	textureBindingLayout.binding = 1;
 	textureBindingLayout.visibility = ShaderStage::Fragment;
 	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
 	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
 
+	// The normal texture binding
+	BindGroupLayoutEntry& normalTextureBindingLayout = bindingLayoutEntries[2];
+	normalTextureBindingLayout.binding = 2;
+	normalTextureBindingLayout.visibility = ShaderStage::Fragment;
+	normalTextureBindingLayout.texture.sampleType = TextureSampleType::Float;
+	normalTextureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
 	// The texture sampler binding
-	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[2];
-	samplerBindingLayout.binding = 2;
+	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[3];
+	samplerBindingLayout.binding = 3;
 	samplerBindingLayout.visibility = ShaderStage::Fragment;
 	samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
 
 	// The lighting uniform buffer binding
-	BindGroupLayoutEntry& lightingUniformLayout = bindingLayoutEntries[3];
-	lightingUniformLayout.binding = 3;
+	BindGroupLayoutEntry& lightingUniformLayout = bindingLayoutEntries[4];
+	lightingUniformLayout.binding = 4;
 	lightingUniformLayout.visibility = ShaderStage::Fragment; // only Fragment is needed
 	lightingUniformLayout.buffer.type = BufferBindingType::Uniform;
 	lightingUniformLayout.buffer.minBindingSize = sizeof(LightingUniforms);
@@ -861,10 +901,9 @@ void Application::terminateBindGroupLayout()
 
 bool Application::initBindGroup()
 {
-	bool clear = true;
     for (auto& obj : mObjects)
     {
-        std::vector<BindGroupEntry> bindings(4);
+        std::vector<BindGroupEntry> bindings(5);
 
         bindings[0].binding = 0;
         bindings[0].buffer = obj.uniformBuffer;
@@ -872,15 +911,18 @@ bool Application::initBindGroup()
         bindings[0].size = sizeof(BasicShaderUniforms);
 
         bindings[1].binding = 1;
-        bindings[1].textureView = mTextureView;
+        bindings[1].textureView = obj.albedo_textureView;
 
-        bindings[2].binding = 2;
-        bindings[2].sampler = mSampler;
+				bindings[2].binding = 2;
+				bindings[2].textureView = obj.normal_textureView;
 
         bindings[3].binding = 3;
-        bindings[3].buffer = mLightUniformBuffer;
-        bindings[3].offset = 0;
-        bindings[3].size = sizeof(LightingUniforms);
+        bindings[3].sampler = obj.sampler;
+
+        bindings[4].binding = 4;
+        bindings[4].buffer = mLightUniformBuffer;
+        bindings[4].offset = 0;
+        bindings[4].size = sizeof(LightingUniforms);
 
         BindGroupDescriptor desc{};
         desc.layout = mBindGroupLayout;
@@ -943,15 +985,19 @@ void Application::updateGui(wgpu::RenderPassEncoder renderPass)
 		ImGui::Text("NOTE: Window resizing is broken on web for the current build.");
 		ImGui::Checkbox("Rotate Model", &rotateModel);
 
-		bool changed = false;
-		ImGui::SeparatorText("Lighting");
-		changed = ImGui::ColorEdit3("Color #0", glm::value_ptr(mLightUniforms.colors[0])) || changed;
-		changed = ImGui::DragDirection("Direction #0", mLightUniforms.directions[0]) || changed;
-		changed = ImGui::ColorEdit3("Color #1", glm::value_ptr(mLightUniforms.colors[1])) || changed;
-		changed = ImGui::DragDirection("Direction #1", mLightUniforms.directions[1]) || changed;
-		
-		mLightUniformsChanged = changed;
+		{
+			bool changed = false;
+			ImGui::SeparatorText("Lighting");
+			changed = ImGui::ColorEdit3("Color #0", glm::value_ptr(mLightUniforms.colors[0])) || changed;
+			changed = ImGui::DragDirection("Direction #0", mLightUniforms.directions[0]) || changed;
+			changed = ImGui::ColorEdit3("Color #1", glm::value_ptr(mLightUniforms.colors[1])) || changed;
+			changed = ImGui::DragDirection("Direction #1", mLightUniforms.directions[1]) || changed;
+			changed = ImGui::SliderFloat("Hardness", &mLightUniforms.hardness, 1.0f, 100.0f) || changed;
+			changed = ImGui::SliderFloat("K Diffuse", &mLightUniforms.kd, 0.0f, 1.0f) || changed;
+			changed = ImGui::SliderFloat("K Specular", &mLightUniforms.ks, 0.0f, 1.0f) || changed;
 
+			mLightUniformsChanged = changed;
+		}
 		ImGuiIO& io = ImGui::GetIO();
 		ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
 		ImGui::End();
@@ -1030,6 +1076,9 @@ void Application::updateViewMatrix()
 	float sy = sin(mCameraState.angles.y);
 	glm::vec3 position = glm::vec3(cx * cy, sx * cy, sy) * std::exp(-mCameraState.zoom);
 	for (RenderObject& obj : mObjects) {
+		obj.uniforms.cameraWorldPosition = position;
+		mQueue.writeBuffer(obj.uniformBuffer, offsetof(BasicShaderUniforms, cameraWorldPosition), &obj.uniforms.cameraWorldPosition, sizeof(BasicShaderUniforms::cameraWorldPosition));
+
 		obj.uniforms.viewMatrix = glm::lookAt(position, glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		mQueue.writeBuffer(
 			obj.uniformBuffer,
