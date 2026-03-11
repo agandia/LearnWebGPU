@@ -9,6 +9,10 @@
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
 
+#include <imgui.h>
+#include <backends/imgui_impl_wgpu.h>
+#include <backends/imgui_impl_glfw.h>
+
 #include <iostream>
 #include <cassert>
 #include <filesystem>
@@ -17,17 +21,31 @@
 
 using namespace wgpu;
 
+#include <glm/gtx/polar_coordinates.hpp>
+
+namespace ImGui {
+	bool DragDirection(const char* label, glm::vec4& direction) {
+		glm::vec2 angles = glm::degrees(glm::polar(glm::vec3(direction)));
+		bool changed = ImGui::DragFloat2(label, glm::value_ptr(angles));
+		direction = glm::vec4(glm::euclidean(glm::radians(angles)), direction.w);
+		return changed;
+	}
+}
+
 bool Application::onInit()
 {
   // Initialization battery test
   if (!initWindowAndDevice()) return false;
 	configSurface();
   if (!initDepthBuffer()) return false;
+	if (!initBindGroupLayout()) return false;
   if (!initRenderPipeline()) return false;
-  if (!initTexture()) return false;
   if (!initGeometry()) return false;
+	if (!initTextures()) return false;
   if (!initUniforms()) return false;
+  if (!initLightingUniforms()) return false;
   if (!initBindGroup()) return false;
+	if (!initGui()) return false;
   return true;
 }
 
@@ -35,22 +53,30 @@ void Application::onFrame()
 {
 	glfwPollEvents();
 	updateDragInertia();
-
+	if (mLightUniformsChanged) {
+		updateLightingUniforms();
+		mLightUniformsChanged = false;
+	}
+	
 	// Update any uniforms that require new values each frame.
 	float time = static_cast<float>(glfwGetTime());
 	// Only update the 1-st float of the buffer
-	mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, time), &time, sizeof(float));
+	// mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, time), &time, sizeof(float));
+	
+	if (rotateModel && !mObjects.empty())
+	{
+		// A bit hacky way of rotatin only the boat model
+		auto& boat = mObjects[0];
 
-	//Update the model  Matrix
-	float angle1 = time;
-	glm::mat4 M(1.0f);
-	M = glm::rotate(M, angle1, glm::vec3(0.0f, 0.0f, 1.0f));
-	M = glm::translate(M, glm::vec3(0.0f, 0.0f, 0.0f));
-	M = glm::scale(M, glm::vec3(0.3f));
-	mUniforms.modelMatrix = M;
+		glm::mat4 M(1.0f);
+		M = glm::rotate(M, time, glm::vec3(0, 0, 1));
+		M = glm::scale(M, glm::vec3(0.3f));
 
-	mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, modelMatrix), &mUniforms.modelMatrix, sizeof(BasicShaderUniforms::modelMatrix));
+		boat.uniforms.modelMatrix = M;
 
+		mQueue.writeBuffer(boat.uniformBuffer, offsetof(BasicShaderUniforms, modelMatrix), &boat.uniforms.modelMatrix, sizeof(glm::mat4));
+	}
+	
 	//float viewZ = glm::mix(0.0f, 0.25f, glm::cos(2 * glm::pi<float>() * time / 4.0f) * 0.5f + 0.5f);
 	//mUniforms.viewMatrix = glm::lookAt(glm::vec3(-0.5f, -1.5f, viewZ + 0.25f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 	//mQueue.writeBuffer(mUniformBuffer, offsetof(BasicShaderUniforms, viewMatrix), &mUniforms.viewMatrix, sizeof(BasicShaderUniforms::viewMatrix));
@@ -102,13 +128,23 @@ void Application::onFrame()
 
 	renderPass.setPipeline(mPipeline);
 
-	renderPass.setVertexBuffer(0, mVertexBuffer, 0, mVertexCount * sizeof(ResourceManager::VertexAttributes));
+	for (auto& obj : mObjects)
+	{
+		renderPass.setVertexBuffer(
+			0,
+			obj.vertexBuffer,
+			0,
+			obj.vertexCount * sizeof(ResourceManager::VertexAttributes)
+		);
 
-	// Set binding group
-	renderPass.setBindGroup(0, mBindGroup, 0, nullptr);
+		renderPass.setBindGroup(0, obj.bindGroup, 0, nullptr);
 
-	renderPass.draw(mVertexCount, 1, 0, 0);
+		renderPass.draw(obj.vertexCount, 1, 0, 0);
+	}
   //renderPass.drawIndexed(mVertexCount, 1, 0, 0, 0); // <- Alternative for indexed
+
+	// We add the GUI drawing commands to the render pass
+	updateGui(renderPass);
 
 	renderPass.end();
 	renderPass.release();
@@ -137,11 +173,14 @@ void Application::onFrame()
 void Application::onFinish()
 {
   // Each part of the renderer takes care of cleaning up after itself, call in reverse order
+	terminateGui();
   terminateBindGroup();
+	terminateLightingUniforms();
   terminateUniforms();
+	terminateTextures();
   terminateGeometry();
-  terminateTexture();
   terminateRenderPipeline();
+	terminateBindGroupLayout();
   terminateDepthBuffer();
   terminateSurfaceConfig();
   terminateWindowAndDevice();
@@ -187,6 +226,13 @@ void Application::onMouseMove(double xpos, double ypos)
 
 void Application::onMouseButton(int button, int action, int /*mods*/)
 {
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.WantCaptureMouse) {
+		// Don't rotate the camera if the mouse is already captured by an ImGui
+		// interaction at this frame.
+		return;
+	}
+
 	if (button == GLFW_MOUSE_BUTTON_LEFT) {
 		switch (action) {
 		case GLFW_PRESS:
@@ -205,6 +251,13 @@ void Application::onMouseButton(int button, int action, int /*mods*/)
 
 void Application::onScroll(double /*xoffset*/, double yoffset)
 {
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.WantCaptureMouse) {
+		// Don't rotate the camera if the mouse is already captured by an ImGui
+		// interaction at this frame.
+		return;
+	}
+
 	mCameraState.zoom += mDragState.scrollSensitivity * static_cast<float>(yoffset);
 	mCameraState.zoom = glm::clamp(mCameraState.zoom, -2.0f, 2.0f);
 	updateViewMatrix();
@@ -233,6 +286,20 @@ bool Application::initWindowAndDevice()
 
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // NO_API bc We don't want OpenGL in the back, we'll use WebGPU instead.
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE); 
+
+
+#ifdef __EMSCRIPTEN__
+	double width, height;
+	// TODO: This is a bit of a hack, before initializing the window we need to query the size of the browser's viewport,
+	// not the canvas, the canvas will return default init values (300x150) so we want the viewport.
+	
+	// If you want the actual viewport size instead:
+	emscripten_get_element_css_size("#canvas", &width, &height);
+
+	mWindowWidth = width;
+	mWindowHeight = height;
+
+#endif
 
 	mWindow = glfwCreateWindow(mWindowWidth, mWindowHeight, "[WebGPU] 3D Playground", NULL, NULL);
 	if (!mWindow) {
@@ -291,8 +358,7 @@ bool Application::initWindowAndDevice()
 #endif
 
   // Store a pointer to the application in the GLFW window, so we can access it in callbacks if needed
-  glfwSetWindowUserPointer(mWindow, this);
-	
+  glfwSetWindowUserPointer(mWindow, this);	
 
 #ifndef __EMSCRIPTEN__
 	glfwSetFramebufferSizeCallback(mWindow, [](GLFWwindow* window, int width, int height) {
@@ -357,19 +423,19 @@ RequiredLimits Application::getRequiredLimits(Adapter adapter)
 	RequiredLimits requiredLimits = Default;
 	requiredLimits.limits = supportedLimits.limits; // Start with the supported limits as a base, then override the ones we want to require
 
-	requiredLimits.limits.maxVertexAttributes = 4;
+	requiredLimits.limits.maxVertexAttributes = 6;
 	requiredLimits.limits.maxVertexBuffers = 1;
 	requiredLimits.limits.maxBufferSize = 1500000 * sizeof(ResourceManager::VertexAttributes);
 	requiredLimits.limits.maxVertexBufferArrayStride = sizeof(ResourceManager::VertexAttributes);
-	requiredLimits.limits.maxInterStageShaderComponents = 8;
-	requiredLimits.limits.maxBindGroups = 1;
-	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
+	requiredLimits.limits.maxInterStageShaderComponents = 17;
+	requiredLimits.limits.maxBindGroups = 2; // ImGui creates a second BindGroup
+	requiredLimits.limits.maxUniformBuffersPerShaderStage = 2;
 	requiredLimits.limits.maxUniformBufferBindingSize = 16 * 4 * sizeof(float);
 	// For now allow textures up to 2k
 	requiredLimits.limits.maxTextureDimension1D = 2048;
 	requiredLimits.limits.maxTextureDimension2D = 2048;
 	requiredLimits.limits.maxTextureArrayLayers = 1;
-	requiredLimits.limits.maxSampledTexturesPerShaderStage = 1;
+	requiredLimits.limits.maxSampledTexturesPerShaderStage = 2;
 	requiredLimits.limits.maxSamplersPerShaderStage = 1;
 
 	return requiredLimits;
@@ -447,7 +513,7 @@ bool Application::initRenderPipeline()
 
 	RenderPipelineDescriptor pipelineDesc{};
 
-	std::vector<VertexAttribute> vertexAttribs(4);
+	std::vector<VertexAttribute> vertexAttribs(6);
 
 	// For each attrib, describe its layout, aka how to interpret the data
 	// Position attribute
@@ -469,6 +535,16 @@ bool Application::initRenderPipeline()
 	vertexAttribs[3].shaderLocation = 3;
 	vertexAttribs[3].format = VertexFormat::Float32x2;
 	vertexAttribs[3].offset = offsetof(ResourceManager::VertexAttributes, uv);
+
+	// Tangent attribute
+	vertexAttribs[4].shaderLocation = 4;
+	vertexAttribs[4].format = VertexFormat::Float32x3;
+	vertexAttribs[4].offset = offsetof(ResourceManager::VertexAttributes, tangent);
+
+	// Bitangent attribute
+	vertexAttribs[5].shaderLocation = 5;
+	vertexAttribs[5].format = VertexFormat::Float32x3;
+	vertexAttribs[5].offset = offsetof(ResourceManager::VertexAttributes, bitangent);
 
 	VertexBufferLayout vertexBufferLayout{};
 	vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
@@ -533,34 +609,6 @@ bool Application::initRenderPipeline()
 	// Default value as well (irrelevant for count = 1 anyways)
 	pipelineDesc.multisample.alphaToCoverageEnabled = false;
 
-	// Create a binding group
-	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(3, Default);
-
-	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
-	bindingLayout.binding = 0;
-	bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
-	bindingLayout.buffer.type = BufferBindingType::Uniform;
-	bindingLayout.buffer.minBindingSize = sizeof(BasicShaderUniforms);
-
-	// The texture binding
-	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
-	textureBindingLayout.binding = 1;
-	textureBindingLayout.visibility = ShaderStage::Fragment;
-	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
-	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
-
-	// The texture sampler binding
-	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[2];
-	samplerBindingLayout.binding = 2;
-	samplerBindingLayout.visibility = ShaderStage::Fragment;
-	samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
-
-	// A bind group contains one or multiple bindings
-	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-	bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
-	bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
-	mBindGroupLayout = mDevice.createBindGroupLayout(bindGroupLayoutDesc);
-
 	// Create the pipeline layout
 	PipelineLayoutDescriptor layoutDesc{};
 	layoutDesc.bindGroupLayoutCount = 1;
@@ -581,35 +629,54 @@ void Application::terminateRenderPipeline()
 	mBindGroupLayout.release();
 }
 
-bool Application::initTexture()
+bool Application::initTextures()
 {
-	SamplerDescriptor samplerDesc{};
-	samplerDesc.addressModeU = AddressMode::Repeat;
-	samplerDesc.addressModeV = AddressMode::Repeat;
-	samplerDesc.addressModeW = AddressMode::Repeat;
-	samplerDesc.magFilter = FilterMode::Linear;
-	samplerDesc.minFilter = FilterMode::Linear;
-	samplerDesc.mipmapFilter = MipmapFilterMode::Linear;
-	samplerDesc.lodMinClamp = 0.0f;
-	samplerDesc.lodMaxClamp = 8.0f;
-	samplerDesc.compare = CompareFunction::Undefined;
-	samplerDesc.maxAnisotropy = 1;
-	mSampler = mDevice.createSampler(samplerDesc);
+	bool lever = false;
+	for (RenderObject& obj : mObjects) {
+		SamplerDescriptor samplerDesc{};
+		samplerDesc.addressModeU = AddressMode::Repeat;
+		samplerDesc.addressModeV = AddressMode::Repeat;
+		samplerDesc.addressModeW = AddressMode::Repeat;
+		samplerDesc.magFilter = FilterMode::Linear;
+		samplerDesc.minFilter = FilterMode::Linear;
+		samplerDesc.mipmapFilter = MipmapFilterMode::Linear;
+		samplerDesc.lodMinClamp = 0.0f;
+		samplerDesc.lodMaxClamp = 8.0f;
+		samplerDesc.compare = CompareFunction::Undefined;
+		samplerDesc.maxAnisotropy = 1;
+		obj.sampler = mDevice.createSampler(samplerDesc);
 
-	mTexture = ResourceManager::loadTexture(RESOURCE_DIR "/fourareen2K_albedo.jpg", mDevice, &mTextureView);
-	if (!mTexture) {
-		std::cerr << "Could not load texture!" << std::endl;
-		return false;
+		// Hack to have the 2 object carry different textures
+		std::string name = lever ? "/cobblestone_floor_08_diff_2k.jpg" : "/fourareen2K_albedo.jpg";
+		
+		obj.albedo_texture = ResourceManager::loadTexture(RESOURCE_DIR + name, mDevice, &obj.albedo_textureView);
+		if (!obj.albedo_texture) {
+			std::cerr << "Could not load texture!" << std::endl;
+			return false;
+		}
+		name = lever ? "/cobblestone_floor_08_nor_gl_2k.png" : "/fourareen2K_normals.png";
+		lever = true;
+		obj.normal_texture = ResourceManager::loadTexture(RESOURCE_DIR + name, mDevice, &obj.normal_textureView);
+		if (!obj.normal_texture) {
+			std::cerr << "Could not load texture!" << std::endl;
+			return false;
+		}
+
 	}
-  return mTextureView != nullptr;
+	
+	return true;
+	
+  //return mTextureView != nullptr;
 }
 
-void Application::terminateTexture()
+void Application::terminateTextures()
 {
-	mTextureView.release();
-	mTexture.destroy();
-	mTexture.release();
-	mSampler.release();
+	for (RenderObject& obj : mObjects) {
+		obj.albedo_textureView.release();
+		obj.albedo_texture.destroy();
+		obj.albedo_texture.release();
+		obj.sampler.release();
+	}
 }
 
 TextureView Application::getNextSurfaceTextureView()
@@ -651,81 +718,230 @@ bool Application::initGeometry()
 		return false;
 	}
 
+	RenderObject boat;
+
 	// Create vertex buffer
 	BufferDescriptor bufferDesc{};
 	bufferDesc.size = vertexData.size() * sizeof(ResourceManager::VertexAttributes);
 	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Vertex;
 	bufferDesc.mappedAtCreation = false;
-	mVertexBuffer = mDevice.createBuffer(bufferDesc);
-	mQueue.writeBuffer(mVertexBuffer, 0, vertexData.data(), bufferDesc.size);
+	boat.vertexBuffer = mDevice.createBuffer(bufferDesc);
+	mQueue.writeBuffer(boat.vertexBuffer, 0, vertexData.data(), bufferDesc.size);
 
-	mVertexCount = static_cast<int>(vertexData.size());
+	boat.vertexCount = static_cast<int>(vertexData.size());
+	mObjects.push_back(boat);
 
-	return mVertexBuffer != nullptr;
+	// Load a second mesh data
+	std::vector<ResourceManager::VertexAttributes> vertexData2;
+	success = ResourceManager::loadGeometryFromObj(RESOURCE_DIR "/plane.obj", vertexData2);
+	if (!success) {
+		std::cerr << "Could not load second geometry!" << std::endl;
+		return false;
+	}
+
+	RenderObject ground;
+	bufferDesc.size = vertexData2.size() * sizeof(ResourceManager::VertexAttributes);
+	ground.vertexBuffer = mDevice.createBuffer(bufferDesc);
+
+	mQueue.writeBuffer(ground.vertexBuffer, 0, vertexData2.data(), bufferDesc.size);
+
+	ground.vertexCount = static_cast<int>(vertexData2.size());
+	mObjects.push_back(ground);
+
+	return (boat.vertexBuffer != nullptr && ground.vertexBuffer != nullptr);
 }
 
 void Application::terminateGeometry()
 {
-	mVertexBuffer.destroy();
-	mVertexBuffer.release();
-	mVertexCount = 0;
+	for (RenderObject& obj : mObjects) {
+		obj.vertexBuffer.destroy();
+		obj.vertexBuffer.release();
+		obj.vertexCount = 0;
+	}
+	mObjects.clear();
 }
 
 bool Application::initUniforms()
 {
-	// Create uniform buffer
-	BufferDescriptor bufferDesc{};
-	bufferDesc.size = sizeof(BasicShaderUniforms);
-	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
-	bufferDesc.mappedAtCreation = false;
-	mUniformBuffer = mDevice.createBuffer(bufferDesc);
+	for (RenderObject& obj : mObjects) {
+		// Create uniform buffer
+		BufferDescriptor bufferDesc{};
+		bufferDesc.size = sizeof(BasicShaderUniforms);
+		bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
+		bufferDesc.mappedAtCreation = false;
+		obj.uniformBuffer = mDevice.createBuffer(bufferDesc);
 
-	// Upload the initial value of the uniforms
-	mUniforms.modelMatrix = glm::mat4(1.0f);
-	//mUniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-  updateViewMatrix();
-	//mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, 640.0f / 480.0f, 0.01f, 100.0f);
-  updateProjectionMatrix();
-	mUniforms.time = 1.0f;
-	mUniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
-	mQueue.writeBuffer(mUniformBuffer, 0, &mUniforms, sizeof(BasicShaderUniforms));
+		// Upload the initial value of the uniforms
+		obj.uniforms.modelMatrix = glm::mat4(1.0f);
+		//mUniforms.viewMatrix = glm::lookAt(glm::vec3(-2.0f, -3.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		
+		//mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, 640.0f / 480.0f, 0.01f, 100.0f);
+		
+		obj.uniforms.time = 1.0f;
+		obj.uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
+		
 
-	return mUniformBuffer != nullptr;
+		if (obj.uniformBuffer == nullptr) return false;
+	}
+	//Hacky translation of the plane
+	if (mObjects.size() >= 2) {
+
+		// boat
+		mObjects[0].uniforms.modelMatrix =
+			glm::scale(glm::mat4(1.0f), glm::vec3(0.3f));
+
+		// ground
+		mObjects[1].uniforms.modelMatrix =
+			glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -0.15f));
+	}
+
+	updateViewMatrix();
+	updateProjectionMatrix();
+
+	for (RenderObject& obj : mObjects) {
+		mQueue.writeBuffer(obj.uniformBuffer, 0, &obj.uniforms, sizeof(BasicShaderUniforms));
+	}
+
+	return true;
 }
 
 void Application::terminateUniforms()
 {
-	mUniformBuffer.destroy();
-	mUniformBuffer.release();
+	for (RenderObject& obj : mObjects) {
+		obj.uniformBuffer.destroy();
+		obj.uniformBuffer.release();
+	}
+}
+
+bool Application::initLightingUniforms()
+{
+	// Create uniform buffer
+	BufferDescriptor bufferDesc{};
+	bufferDesc.size = sizeof(LightingUniforms);
+	bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Uniform;
+	bufferDesc.mappedAtCreation = false;
+	mLightUniformBuffer = mDevice.createBuffer(bufferDesc);
+
+	// Initial values
+	mLightUniforms.directions[0] = { 0.5f, -0.9f, 0.1f, 0.0f };
+	mLightUniforms.directions[1] = { 0.2f, 0.4f, 0.3f, 0.0f };
+	mLightUniforms.colors[0] = { 1.0f, 0.9f, 0.6f, 1.0f };
+	mLightUniforms.colors[1] = { 1.0f, 1.0f, 0.8f, 1.0f };
+
+	updateLightingUniforms();
+
+	return mLightUniformBuffer != nullptr;
+}
+
+void Application::terminateLightingUniforms()
+{
+	mLightUniformBuffer.destroy();
+	mLightUniformBuffer.release();
+}
+
+void Application::updateLightingUniforms()
+{
+	if (mLightUniformsChanged) {
+		mQueue.writeBuffer(mLightUniformBuffer, 0, &mLightUniforms, sizeof(LightingUniforms));
+		mLightUniformsChanged = false;
+	}
+}
+
+bool Application::initBindGroupLayout()
+{
+	// Create a binding group
+	std::vector<BindGroupLayoutEntry> bindingLayoutEntries(5, Default);
+
+	BindGroupLayoutEntry& bindingLayout = bindingLayoutEntries[0];
+	bindingLayout.binding = 0;
+	bindingLayout.visibility = ShaderStage::Vertex | ShaderStage::Fragment;
+	bindingLayout.buffer.type = BufferBindingType::Uniform;
+	bindingLayout.buffer.minBindingSize = sizeof(BasicShaderUniforms);
+
+	// The albedo texture binding
+	BindGroupLayoutEntry& textureBindingLayout = bindingLayoutEntries[1];
+	textureBindingLayout.binding = 1;
+	textureBindingLayout.visibility = ShaderStage::Fragment;
+	textureBindingLayout.texture.sampleType = TextureSampleType::Float;
+	textureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
+	// The normal texture binding
+	BindGroupLayoutEntry& normalTextureBindingLayout = bindingLayoutEntries[2];
+	normalTextureBindingLayout.binding = 2;
+	normalTextureBindingLayout.visibility = ShaderStage::Fragment;
+	normalTextureBindingLayout.texture.sampleType = TextureSampleType::Float;
+	normalTextureBindingLayout.texture.viewDimension = TextureViewDimension::_2D;
+
+	// The texture sampler binding
+	BindGroupLayoutEntry& samplerBindingLayout = bindingLayoutEntries[3];
+	samplerBindingLayout.binding = 3;
+	samplerBindingLayout.visibility = ShaderStage::Fragment;
+	samplerBindingLayout.sampler.type = SamplerBindingType::Filtering;
+
+	// The lighting uniform buffer binding
+	BindGroupLayoutEntry& lightingUniformLayout = bindingLayoutEntries[4];
+	lightingUniformLayout.binding = 4;
+	lightingUniformLayout.visibility = ShaderStage::Fragment; // only Fragment is needed
+	lightingUniformLayout.buffer.type = BufferBindingType::Uniform;
+	lightingUniformLayout.buffer.minBindingSize = sizeof(LightingUniforms);
+
+	// A bind group contains one or multiple bindings
+	BindGroupLayoutDescriptor bindGroupLayoutDesc{};
+	bindGroupLayoutDesc.entryCount = (uint32_t)bindingLayoutEntries.size();
+	bindGroupLayoutDesc.entries = bindingLayoutEntries.data();
+	mBindGroupLayout = mDevice.createBindGroupLayout(bindGroupLayoutDesc);
+
+	return mBindGroupLayout != nullptr;
+}
+
+void Application::terminateBindGroupLayout()
+{
+	mBindGroupLayout.release();
 }
 
 bool Application::initBindGroup()
 {
-	// Create a binding
-	std::vector<BindGroupEntry> bindings(3);
-	bindings[0].binding = 0;
-	bindings[0].buffer = mUniformBuffer;
-	bindings[0].offset = 0;
-	bindings[0].size = sizeof(BasicShaderUniforms);
+    for (auto& obj : mObjects)
+    {
+        std::vector<BindGroupEntry> bindings(5);
 
-	bindings[1].binding = 1;
-	bindings[1].textureView = mTextureView;
+        bindings[0].binding = 0;
+        bindings[0].buffer = obj.uniformBuffer;
+        bindings[0].offset = 0;
+        bindings[0].size = sizeof(BasicShaderUniforms);
 
-	bindings[2].binding = 2;
-	bindings[2].sampler = mSampler;
+        bindings[1].binding = 1;
+        bindings[1].textureView = obj.albedo_textureView;
 
-	BindGroupDescriptor bindGroupDesc{};
-	bindGroupDesc.layout = mBindGroupLayout;
-	bindGroupDesc.entryCount = (uint32_t)bindings.size();
-	bindGroupDesc.entries = bindings.data();
-	mBindGroup = mDevice.createBindGroup(bindGroupDesc);
+				bindings[2].binding = 2;
+				bindings[2].textureView = obj.normal_textureView;
 
-  return mBindGroup != nullptr;
+        bindings[3].binding = 3;
+        bindings[3].sampler = obj.sampler;
+
+        bindings[4].binding = 4;
+        bindings[4].buffer = mLightUniformBuffer;
+        bindings[4].offset = 0;
+        bindings[4].size = sizeof(LightingUniforms);
+
+        BindGroupDescriptor desc{};
+        desc.layout = mBindGroupLayout;
+        desc.entryCount = (uint32_t)bindings.size();
+        desc.entries = bindings.data();
+
+        obj.bindGroup = mDevice.createBindGroup(desc);
+
+				if (obj.bindGroup == nullptr) return false;
+    }
+
+    return true;
 }
 
 void Application::terminateBindGroup()
 {
-  mBindGroup.release();
+	for (auto& obj : mObjects) {
+		obj.bindGroup.release();
+	}
 }
 
 void Application::handleResize(int width, int height)
@@ -735,6 +951,66 @@ void Application::handleResize(int width, int height)
   onResize();
 }
 
+bool Application::initGui()
+{
+	// Setup Dear ImGui context
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGui::GetIO();
+
+	// Setup Platform/Renderer backends
+	ImGui_ImplGlfw_InitForOther(mWindow, true);
+	ImGui_ImplWGPU_Init(mDevice, 3, mSurfaceFormat, mDepthTextureFormat);
+	return true;
+}
+
+void Application::terminateGui()
+{
+	ImGui_ImplGlfw_Shutdown();
+	ImGui_ImplWGPU_Shutdown();
+}
+
+void Application::updateGui(wgpu::RenderPassEncoder renderPass)
+{
+	// Start the Dear ImGui frame
+	ImGui_ImplWGPU_NewFrame();
+	ImGui_ImplGlfw_NewFrame();
+	ImGui::NewFrame();
+	{
+		//std::cout << " [Update GUI] mWindow Size: " << mWindowWidth << ", " << mWindowHeight << std::endl;
+		// Build our UI
+
+		ImGui::Begin("3D Playground!");
+
+		ImGui::Text("NOTE: Window resizing is broken on web for the current build.");
+		ImGui::Checkbox("Rotate Model", &rotateModel);
+
+		{
+			bool changed = false;
+			ImGui::SeparatorText("Lighting");
+			changed = ImGui::ColorEdit3("Color #0", glm::value_ptr(mLightUniforms.colors[0])) || changed;
+			changed = ImGui::DragDirection("Direction #0", mLightUniforms.directions[0]) || changed;
+			changed = ImGui::ColorEdit3("Color #1", glm::value_ptr(mLightUniforms.colors[1])) || changed;
+			changed = ImGui::DragDirection("Direction #1", mLightUniforms.directions[1]) || changed;
+			changed = ImGui::SliderFloat("Hardness", &mLightUniforms.hardness, 1.0f, 100.0f) || changed;
+			changed = ImGui::SliderFloat("K Diffuse", &mLightUniforms.kd, 0.0f, 1.0f) || changed;
+			changed = ImGui::SliderFloat("K Specular", &mLightUniforms.ks, 0.0f, 1.0f) || changed;
+
+			mLightUniformsChanged = changed;
+		}
+		ImGuiIO& io = ImGui::GetIO();
+		ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+		ImGui::End();
+	}
+
+	// Draw the UI
+	ImGui::EndFrame();
+	// Convert the UI defined above into low-level drawing commands
+	ImGui::Render();
+	// Execute the low-level drawing commands on the WebGPU backend
+	ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), renderPass);
+}
+
 
 #ifdef __EMSCRIPTEN__
 EM_BOOL Application::browserResizeCallback(int /*eventType*/, const EmscriptenUiEvent* event, void* userData) {
@@ -742,11 +1018,11 @@ EM_BOOL Application::browserResizeCallback(int /*eventType*/, const EmscriptenUi
 	int height = event->windowInnerHeight;
 
 	//std::cout << "[Browser] window resize: " << width << " x " << height << std::endl;
-
+	
 	emscripten_set_canvas_element_size("#canvas", width, height);
 
 	Application* app = reinterpret_cast<Application*>(userData);
-  app->handleResize(width, height);
+	app->handleResize(width, height);
 
 	return EM_TRUE;
 }
@@ -799,25 +1075,33 @@ void Application::updateViewMatrix()
 	float cy = cos(mCameraState.angles.y);
 	float sy = sin(mCameraState.angles.y);
 	glm::vec3 position = glm::vec3(cx * cy, sx * cy, sy) * std::exp(-mCameraState.zoom);
-	mUniforms.viewMatrix = glm::lookAt(position, glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-	mQueue.writeBuffer(
-		mUniformBuffer,
-		offsetof(BasicShaderUniforms, viewMatrix),
-		&mUniforms.viewMatrix,
-		sizeof(BasicShaderUniforms::viewMatrix)
-	);
+	for (RenderObject& obj : mObjects) {
+		obj.uniforms.cameraWorldPosition = position;
+		mQueue.writeBuffer(obj.uniformBuffer, offsetof(BasicShaderUniforms, cameraWorldPosition), &obj.uniforms.cameraWorldPosition, sizeof(BasicShaderUniforms::cameraWorldPosition));
+
+		obj.uniforms.viewMatrix = glm::lookAt(position, glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		mQueue.writeBuffer(
+			obj.uniformBuffer,
+			offsetof(BasicShaderUniforms, viewMatrix),
+			&obj.uniforms.viewMatrix,
+			sizeof(BasicShaderUniforms::viewMatrix)
+		);
+	}
 }
 
 void Application::updateProjectionMatrix()
 {
 	float ratio = mWindowWidth / (float)mWindowHeight;
-	mUniforms.projectionMatrix = glm::perspective(45 * glm::pi<float>() / 180.0f, ratio, 0.01f, 100.0f);
-	mQueue.writeBuffer(
-		mUniformBuffer,
-		offsetof(BasicShaderUniforms, projectionMatrix),
-		&mUniforms.projectionMatrix,
-		sizeof(BasicShaderUniforms::projectionMatrix)
-	);
+	glm::mat4 proj = glm::perspective(45 * glm::pi<float>() / 180.0f, ratio, 0.01f, 100.0f);
+	for (RenderObject& obj : mObjects) {
+		obj.uniforms.projectionMatrix = proj;
+		mQueue.writeBuffer(
+			obj.uniformBuffer,
+			offsetof(BasicShaderUniforms, projectionMatrix),
+			&obj.uniforms.projectionMatrix,
+			sizeof(BasicShaderUniforms::projectionMatrix)
+		);
+	}
 }
 
 void Application::updateDragInertia()

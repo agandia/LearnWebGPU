@@ -8,6 +8,8 @@
 #include <emscripten/html5.h>
 #endif // __EMSCRIPTEN__
 
+#include <array>
+
  // Forward declare
 struct GLFWwindow;
 
@@ -49,8 +51,8 @@ private:
 	bool initRenderPipeline();
 	void terminateRenderPipeline();
 
-	bool initTexture();
-	void terminateTexture();
+	bool initTextures();
+	void terminateTextures();
 
 	wgpu::TextureView getNextSurfaceTextureView();
 
@@ -60,10 +62,23 @@ private:
 	bool initUniforms();
 	void terminateUniforms();
 
+	bool initLightingUniforms();
+	void terminateLightingUniforms();
+	void updateLightingUniforms();
+
+	bool initBindGroupLayout();
+	void terminateBindGroupLayout();
+
 	bool initBindGroup();
 	void terminateBindGroup();
 	
   void handleResize(int width, int height);
+
+	// GUI
+	bool initGui();
+	void terminateGui();
+	void updateGui(wgpu::RenderPassEncoder renderPass);
+
 #ifdef __EMSCRIPTEN__
 	static EM_BOOL browserResizeCallback(int eventType, const EmscriptenUiEvent* event, void* userData);
 
@@ -91,11 +106,40 @@ private:
 		glm::mat4 viewMatrix;
 		glm::mat4 modelMatrix;
 		glm::vec4 color;
+		glm::vec3 cameraWorldPosition;
 		float time;
-		float _pad[3];
 	};
 	// Have the compiler check byte alignment
 	static_assert(sizeof(BasicShaderUniforms) % 16 == 0);
+
+	struct LightingUniforms {
+		std::array<glm::vec4, 2> directions;
+		std::array<glm::vec4, 2> colors;
+
+		// Material properties
+		float hardness = 32.0f;
+		float kd = 1.0f;
+		float ks = 0.5f;
+
+		float _pad[1];
+	};
+	static_assert(sizeof(LightingUniforms) % 16 == 0);
+
+	struct RenderObject {
+		wgpu::Buffer vertexBuffer;
+		int vertexCount = 0;
+
+		wgpu::Buffer uniformBuffer;
+		BasicShaderUniforms uniforms;
+		wgpu::BindGroup bindGroup;
+
+		wgpu::Sampler sampler = nullptr;
+		wgpu::Texture albedo_texture = nullptr;
+		wgpu::TextureView albedo_textureView = nullptr;
+		wgpu::Texture normal_texture = nullptr;
+		wgpu::TextureView normal_textureView = nullptr;
+	};
+
 
 	struct CameraState {
 		// angles.x is the rotation of the camera around the global vertical axis, affected by mouse.x
@@ -126,8 +170,10 @@ private:
 
 	// Window and Device
 	GLFWwindow* mWindow = nullptr;
-  uint32_t mWindowWidth = 1920;
-  uint32_t mWindowHeight = 1080;
+	uint32_t mNewWindowWidth = 1080;
+	uint32_t mNewWindowHeight = 720;
+  uint32_t mWindowWidth = 1080;
+  uint32_t mWindowHeight = 720;
 
 	wgpu::Surface mSurface = nullptr;
 	wgpu::Device mDevice = nullptr;
@@ -149,22 +195,32 @@ private:
 	wgpu::ShaderModule mShaderModule = nullptr;
 	wgpu::RenderPipeline mPipeline = nullptr;
 
-	// Texture
-	wgpu::Sampler mSampler = nullptr;
-	wgpu::Texture mTexture = nullptr;
-	wgpu::TextureView mTextureView = nullptr;
+	//// Texture
+	//wgpu::Sampler mSampler = nullptr;
+	//wgpu::Texture mTexture = nullptr;
+	//wgpu::TextureView mTextureView = nullptr;
 
-	// Geometry
-	wgpu::Buffer mVertexBuffer = nullptr;
-	int mVertexCount = 0;
+	std::vector<RenderObject> mObjects;
 
-	// Uniforms
-	wgpu::Buffer mUniformBuffer = nullptr;
-	BasicShaderUniforms mUniforms;
+	//// Geometry
+	//wgpu::Buffer mVertexBuffer = nullptr;
+	//int mVertexCount = 0;
+	//
+	//// Uniforms
+	//wgpu::Buffer mUniformBuffer = nullptr;
+	//BasicShaderUniforms mUniforms;
 
-	// Bind Group
-	wgpu::BindGroup mBindGroup = nullptr;
+	wgpu::Buffer mLightUniformBuffer = nullptr;
+	LightingUniforms mLightUniforms;
+	bool mLightUniformsChanged = true;
+
+	//// Bind Group
+	//wgpu::BindGroup mBindGroup = nullptr;
 
   CameraState mCameraState;
   DragState mDragState;
+
+	//GUI
+	float f = 0.0f;
+	bool rotateModel = true;
 };
